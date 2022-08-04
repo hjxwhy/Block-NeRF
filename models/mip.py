@@ -396,7 +396,7 @@ def volumetric_rendering(rgb, density, t_samples, dirs, white_bkgd):
     # distance = torch.clamp(torch.nan_to_num(distance), t_samples[:, 0], t_samples[:, -1])
     if white_bkgd:
         comp_rgb = comp_rgb + (1. - torch.unsqueeze(acc, dim=-1))
-    return comp_rgb, distance, weights
+    return comp_rgb, distance, weights, trans
 
 
 def contract(x):

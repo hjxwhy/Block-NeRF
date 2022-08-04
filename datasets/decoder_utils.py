@@ -2,13 +2,29 @@ import cv2
 import numpy as np
 import tensorflow as tf
 
+def _flatten(x):
+    rays = []
+    for items in x:
+        flatten_items = [item.reshape([-1, item.shape[-1]]) for item in items]
+        rays.append(np.hstack(flatten_items))
+    return np.vstack(rays)
+
+
+
 def _decoder(batch):
     height, width = int(batch["height"]), int(batch["width"])
-    batch["image_hash"] = batch["image_hash"][0]
-    batch['cam_idx'] = batch['cam_idx'][0]
+    batch["image_hash"] = str(int(batch["image_hash"][0]))
+    batch['cam_idx'] = int(batch['cam_idx'][0])
     batch["image"] = np.array(cv2.imdecode(np.frombuffer(batch["image"], np.uint8), -1))
     batch['ray_dirs'] = batch['ray_dirs'].reshape([height, width, 3])
     batch['ray_origins'] = batch['ray_origins'].reshape([height, width, 3])
+    batch["height"], batch["width"] = int(batch["height"]), int(batch["width"])
+    batch["equivalent_exposure"] = float(batch["equivalent_exposure"])
+    if batch.get('mask') == None:
+        batch['mask'] = []
+    else:
+        batch['mask'] = batch['mask'].reshape([height, width, 1])
+
     return batch
 
 def _decoder_tf(batch):
