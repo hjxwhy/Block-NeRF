@@ -22,8 +22,8 @@ def _get_opts() -> Namespace:
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--datasets_path', type=str,
-                        default='/home/hjx/Documents/nerf/block_nerf/v1.0', help='Path to TFRecoder data')
-    parser.add_argument('--output_path', type=str, default='/home/hjx/Documents/nerf/block_nerf',
+                        default='/media/hjx/2D97AD940A9AD661/v1.0', help='Path to TFRecoder data')
+    parser.add_argument('--output_path', type=str, default='/media/hjx/2D97AD940A9AD661',
                         help='Path to write converted dataset to')
     parser.add_argument('--split_only', default=False, action='store_true',
                         help='Only split the region, only you have generate the dataset_mata.json')

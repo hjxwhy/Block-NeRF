@@ -39,6 +39,17 @@ class FilesystemDataset(Dataset):
         self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
         self.load_chunk()
 
+    def _get_radii(self, w, h, focal):
+        i, j = np.meshgrid(  # pylint: disable=unbalanced-tuple-unpacking
+                np.arange(w, dtype=np.float32) + .5,  # X-Axis (columns)
+                np.arange(h, dtype=np.float32) + .5,  # Y-Axis (rows)
+                indexing='xy')
+        direction = np.stack([(i-w/2)/focal, -(j-h/2)/focal, -np.ones_like(i)], axis=-1)
+        dx = np.sqrt(np.sum((direction[:-1, :, :] - direction[1:, :, :]) ** 2, -1))
+        dx = np.concatenate([dx, dx[-2:-1, :]], 0)
+        radii = dx[..., None] * 2 / np.sqrt(12)
+        return radii
+
     def _load_chunk_inner(self):
         if self.resume_from_ckpt:
             next_index = self.chosen_index
@@ -65,34 +76,32 @@ class FilesystemDataset(Dataset):
         masks = []
         for key, value in chunk_dict.items():
             tfrecord_path = self.dataset_dir / (self.prefix+key)
-            dataset = tf.data.TFRecordDataset(
-                tfrecord_path,
-                compression_type="GZIP",
-            )
-            dataset_map = dataset.map(_parse_fn)
+            # dataset = tf.data.TFRecordDataset(
+            #     tfrecord_path,
+            #     compression_type="GZIP",
+            # )
+            # dataset_map = dataset.map(_parse_fn)
 
-            # dataset_map = TFRecordDataset(tfrecord_path, index_path=None, compression_type="gzip", transform=_decoder)
+            dataset_map = TFRecordDataset(tfrecord_path, index_path=None, compression_type="gzip", transform=_decoder)
             
             
             for batch in dataset_map:
                 img_sh = str(int(batch['image_hash']))
                 if img_sh in value:
 
-                    batch = _decoder_tf(batch)
+                    # batch = _decoder_tf(batch)
 
-                    direction = batch['ray_dirs'] / np.abs(batch['ray_dirs'][:, :, 2:3])
-                    dx = np.sqrt(np.sum((direction[:-1, :, :] - direction[1:, :, :]) ** 2, -1))
-                    dx = np.concatenate([dx, dx[-2:-1, :]], 0)
-                    radii = dx[..., None] * 2 / np.sqrt(12)
+                    direction = batch['ray_dirs']
+                    radii = self._get_radii(batch['width'], batch['height'], batch['intrinsics'][0])
                     it = self.metadata_dicts[img_sh]
                     if it['type'] == 'val' and self.split=='train':
                         height, width = batch['height'], batch['width']
                         batch["image"] = batch['image'][:, width//2:]
                         batch['ray_origins'] = batch['ray_origins'][:, width//2:]
                         radii = radii[:, width//2:]
-                        direction = direction[:, width//2]
-                        batch['mask'] = batch['mask'][:, width//2]
-                    images.append(batch["image"])
+                        direction = direction[:, width//2:]
+                        batch['mask'] = batch['mask'][:, width//2:]
+                    images.append(batch["image"].astype(np.float32) / 255)
                     ray_origins.append(batch['ray_origins'])
                     radiis.append(radii)
                     directions.append(direction)
@@ -110,7 +119,7 @@ class FilesystemDataset(Dataset):
         del ray_origins, radiis, directions, image_indices, masks, exposures
         if self.split == 'train':
             rays = _flatten(rays)
-            images = np.concatenate([img.reshape([-1, 3]) for img in images], dtype=np.float32) / 255
+            images = np.concatenate([img.reshape([-1, 3]) for img in images], dtype=np.float32)
         return rays, images, next_index
 
     def __len__(self):
@@ -159,8 +168,15 @@ if __name__ == '__main__':
             }
             index+=1
 
-    filesystem = FilesystemDataset(image_hashs_dict, '/home/hjx/Documents/nerf/block_nerf', 5, 'train')
+    filesystem = FilesystemDataset(val_hashs_dict, '/home/hjx/Documents/nerf/block_nerf', 5, 'val')
+    from torch.utils.data import DistributedSampler, DataLoader
+    # data_loader = DataLoader(filesystem, batch_size=1, shuffle=True, num_workers=6,
+    #                                     pin_memory=True)
     for _ in range(10):
         t1 = time.time()
         filesystem.load_chunk()
+        data_loader = DataLoader(filesystem, batch_size=1, shuffle=False, num_workers=6,
+                                        pin_memory=True)
+        for batch in data_loader:
+            print(len(batch['rays']))
         print(time.time()-t1)

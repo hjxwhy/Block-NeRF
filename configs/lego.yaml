@@ -1,6 +1,6 @@
 near: 1
 far: 1000
-num_samples: 512
+num_samples: 56
 max_deg_point: 16
 deg_view: 4
 deg_exposure: 4

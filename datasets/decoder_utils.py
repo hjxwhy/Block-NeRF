@@ -15,12 +15,12 @@ def _decoder(batch):
     height, width = int(batch["height"]), int(batch["width"])
     batch["image_hash"] = str(int(batch["image_hash"][0]))
     batch['cam_idx'] = int(batch['cam_idx'][0])
-    batch["image"] = np.array(cv2.imdecode(np.frombuffer(batch["image"], np.uint8), -1))
+    batch["image"] = np.array(cv2.cvtColor(cv2.imdecode(np.frombuffer(batch["image"], np.uint8), -1), cv2.COLOR_BGR2RGB))
     batch['ray_dirs'] = batch['ray_dirs'].reshape([height, width, 3])
     batch['ray_origins'] = batch['ray_origins'].reshape([height, width, 3])
     batch["height"], batch["width"] = int(batch["height"]), int(batch["width"])
     batch["equivalent_exposure"] = float(batch["equivalent_exposure"])
-    if batch.get('mask') == None:
+    if batch.get('mask') is None:
         batch['mask'] = []
     else:
         batch['mask'] = batch['mask'].reshape([height, width, 1])

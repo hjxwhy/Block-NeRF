@@ -156,7 +156,7 @@ class MipNerf(torch.nn.Module):
                  rgb_padding: float = 0.001,
                  append_identity: bool = True,
                  mlp_net_depth: int = 8,
-                 mlp_net_width: int = 256,
+                 mlp_net_width: int = 512,
                  mlp_net_depth_condition: int = 3,
                  mlp_net_width_condition: int = 128,
                  mlp_skip_index: int = 4,

@@ -32,11 +32,6 @@ def render_rays(nerf: nn.Module,
                 hparams: Namespace,
                 randomized:bool,
                 white_bkgd:bool=True,
-                # sphere_center: Optional[torch.Tensor],
-                # sphere_radius: Optional[torch.Tensor],
-                # get_depth: bool,
-                # get_depth_variance: bool,
-                # get_bg_fg_rgb: bool
                 ):# -> Tuple[Dict[str, torch.Tensor], bool]:
     #rays: ray_origins[i], directions[i], radiis[i], image_indices[i], exposures[i], mask[i](option)
     ret = {}
@@ -57,17 +52,16 @@ def render_rays(nerf: nn.Module,
                     False,
                 )
             else:
-                ...
-    #             stage = 'fine'
-    #             t_samples, means_covs = resample_along_rays(
-    #                 rays[:, :3], #.origins
-    #                 rays[:,3:6], #.directions,
-    #                 rays[:, 6:7], #.radii,
-    #                 t_samples,
-    #                 weights,
-    #                 randomized,
-    #                 # resample_padding=self.resample_padding,
-    #             )
+                stage = 'fine'
+                t_samples, means_covs = resample_along_rays(
+                    rays[:, :3], #.origins
+                    rays[:,3:6], #.directions,
+                    rays[:, 6:7], #.radii,
+                    t_samples,
+                    weights,
+                    randomized,
+                    # resample_padding=self.resample_padding,
+                )
             samples_enc = integrated_pos_enc(
                 means_covs,
                 0,
@@ -75,9 +69,8 @@ def render_rays(nerf: nn.Module,
             )  # samples_enc: [B, N, 2*3*L]  L:(max_deg_point - min_deg_point)
 
             # Point attribute predictions
-            viewdirs = rays[:, 3:6] / torch.norm(rays[:, 3:6], dim=-1, keepdim=True)
             viewdirs_enc = pos_enc(
-                viewdirs,
+                rays[:, 3:6],
                 min_deg=0,
                 max_deg=hparams.deg_view,
                 append_identity=True,
@@ -104,11 +97,11 @@ def render_rays(nerf: nn.Module,
                 white_bkgd=white_bkgd,
             )
             ret[f'rgb_{stage}'] = comp_rgb
-            # ret[f'dist_{stage}'] = distance
-            # ret[f'weights_{stage}'] = weights
+            ret[f'depth_{stage}'] = distance
+            ret[f'weights_{stage}'] = weights
             ret[f'trans_{stage}'] = trans
-
-            visibility_trans = visibility(samples_enc, viewdirs_enc)
-            ret[f'visibility_trans_{stage}'] = visibility_trans
+            if visibility is not None:
+                visibility_trans = visibility(samples_enc, viewdirs_enc)
+                ret[f'visibility_trans_{stage}'] = visibility_trans
 
     return ret

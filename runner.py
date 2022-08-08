@@ -125,7 +125,7 @@ class Runner:
 
         optimizers = {}
         optimizers['nerf'] = Adam(self.nerf.parameters(), lr=self.hparams.lr)
-        
+
         if self.visibility is not None:
             optimizers['visibility'] = Adam(
                 self.visibility.parameters(), lr=self.hparams.lr)
@@ -163,6 +163,9 @@ class Runner:
             dataset = FilesystemDataset(
                 self.train_items, self.hparams.dataset_path, self.hparams.img_nums)
             
+            self.val_dataset = FilesystemDataset(
+                self.val_items, self.hparams.dataset_path, 1, split='val')
+
             if self.hparams.ckpt_path is not None and self.hparams.resume_ckpt_state:
                 dataset.set_state(checkpoint['chosen_index'], checkpoint['image_hash'])
 
@@ -329,143 +332,138 @@ class Runner:
 
         return metrics
 
-    # def _run_validation(self, train_index: int) -> Dict[str, float]:
-    #     with torch.inference_mode():
-    #         self.nerf.eval()
+    def _run_validation(self, train_index: int) -> Dict[str, float]:
+        self.val_dataset.load_chunk()
 
-    #         val_metrics = defaultdict(float)
-    #         base_tmp_path = None
-    #         try:
-    #             if 'RANK' in os.environ:
-    #                 base_tmp_path = Path(self.hparams.exp_name) / os.environ['TORCHELASTIC_RUN_ID']
-    #                 metric_path = base_tmp_path / 'tmp_val_metrics'
-    #                 image_path = base_tmp_path / 'tmp_val_images'
+        if 'RANK' in os.environ:
+            world_size = int(os.environ['WORLD_SIZE'])
+            sampler = DistributedSampler(
+                self.val_dataset, world_size, int(os.environ['RANK']))
+            assert self.hparams.batch_size % world_size == 0
+            data_loader = DataLoader(self.val_dataset, batch_size=1, sampler=sampler,
+                                     num_workers=6, pin_memory=True)
+        else:
+            data_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=True, num_workers=6,
+                                     pin_memory=True)
+        with torch.inference_mode():
+            self.nerf.eval()
+            self.visibility.eval()
 
-    #                 world_size = int(os.environ['WORLD_SIZE'])
-    #                 indices_to_eval = np.arange(int(os.environ['RANK']), len(self.val_items), world_size)
-    #                 if self.is_master:
-    #                     base_tmp_path.mkdir()
-    #                     metric_path.mkdir()
-    #                     image_path.mkdir()
-    #                 dist.barrier()
-    #             else:
-    #                 indices_to_eval = np.arange(len(self.val_items))
+            val_metrics = defaultdict(float)
+            base_tmp_path = None
+            try:
+                if 'RANK' in os.environ:
+                    base_tmp_path = Path(
+                        self.hparams.exp_name) / os.environ['TORCHELASTIC_RUN_ID']
+                    metric_path = base_tmp_path / 'tmp_val_metrics'
+                    image_path = base_tmp_path / 'tmp_val_images'
+                    trans_path = base_tmp_path / 'tmp_val_trans'
 
-    #             for i in main_tqdm(indices_to_eval):
-    #                 metadata_item = self.val_items[i]
-    #                 viz_rgbs = metadata_item.load_image().float() / 255.
+                    world_size = int(os.environ['WORLD_SIZE'])
+                    indices_to_eval = np.arange(
+                        int(os.environ['RANK']), len(self.val_items), world_size)
+                    if self.is_master:
+                        base_tmp_path.mkdir()
+                        metric_path.mkdir()
+                        image_path.mkdir()
+                    dist.barrier()
 
-    #                 results, _ = self.render_image(metadata_item)
-    #                 typ = 'fine' if 'rgb_fine' in results else 'coarse'
-    #                 viz_result_rgbs = results[f'rgb_{typ}'].view(*viz_rgbs.shape).cpu()
+                for i, batch in main_tqdm(enumerate(data_loader)):
 
-    #                 eval_rgbs = viz_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
-    #                 eval_result_rgbs = viz_result_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
+                    viz_rgbs = batch['rgbs'][0]
+                    results = self.render_image(batch)
+                    typ = 'fine' if 'rgb_fine' in results else 'coarse'
+                    viz_result_rgbs = results[f'rgb_{typ}'].view(*viz_rgbs.shape).cpu()
 
-    #                 val_psnr = psnr(eval_result_rgbs.view(-1, 3), eval_rgbs.view(-1, 3))
+                    eval_rgbs = viz_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
+                    eval_result_rgbs = viz_result_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
+                    mask = (batch['rays'][-1][:, :, viz_rgbs.shape[1] // 2:] > 0)
+                    val_psnr = psnr(eval_result_rgbs.view(-1, 3)[mask.flatten(), :], eval_rgbs.view(-1, 3)[mask.flatten(), :])
 
-    #                 metric_key = 'val/psnr/{}'.format(i)
-    #                 if self.writer is not None:
-    #                     self.writer.add_scalar(metric_key, val_psnr, train_index)
-    #                 else:
-    #                     torch.save({'value': val_psnr, 'metric_key': metric_key, 'agg_key': 'val/psnr'},
-    #                                metric_path / 'psnr-{}.pt'.format(i))
+                    metric_key = 'val/psnr/{}'.format(i)
+                    if self.writer is None:
+                        torch.save({'value': val_psnr, 'metric_key': metric_key, 'agg_key': 'val/psnr'},
+                                   metric_path / 'psnr-{}.pt'.format(i))
 
-    #                 val_metrics['val/psnr'] += val_psnr
+                    val_metrics['val/psnr'] += val_psnr
 
-    #                 val_ssim = ssim(eval_result_rgbs.view(*eval_rgbs.shape), eval_rgbs, 1)
+                    val_ssim = ssim(eval_result_rgbs.view(*eval_rgbs.shape)*mask.float(), eval_rgbs*mask.float(), 1)
 
-    #                 metric_key = 'val/ssim/{}'.format(i)
-    #                 if self.writer is not None:
-    #                     self.writer.add_scalar(metric_key, val_ssim, train_index)
-    #                 else:
-    #                     torch.save({'value': val_ssim, 'metric_key': metric_key, 'agg_key': 'val/ssim'},
-    #                                metric_path / 'ssim-{}.pt'.format(i))
+                    metric_key = 'val/ssim/{}'.format(i)
+                    if self.writer is  None:
+                        torch.save({'value': val_ssim, 'metric_key': metric_key, 'agg_key': 'val/ssim'},
+                                   metric_path / 'ssim-{}.pt'.format(i))
 
-    #                 val_metrics['val/ssim'] += val_ssim
+                    val_metrics['val/ssim'] += val_ssim
 
-    #                 val_lpips_metrics = lpips(eval_result_rgbs.view(*eval_rgbs.shape), eval_rgbs)
+                    viz_result_rgbs = viz_result_rgbs.view(
+                        viz_rgbs.shape[0], viz_rgbs.shape[1], 3).cpu()
+                    viz_depth = results[f'depth_{typ}']
 
-    #                 for network in val_lpips_metrics:
-    #                     agg_key = 'val/lpips/{}'.format(network)
-    #                     metric_key = '{}/{}'.format(agg_key, i)
-    #                     if self.writer is not None:
-    #                         self.writer.add_scalar(metric_key, val_lpips_metrics[network], train_index)
-    #                     else:
-    #                         torch.save(
-    #                             {'value': val_lpips_metrics[network], 'metric_key': metric_key, 'agg_key': agg_key},
-    #                             metric_path / 'lpips-{}-{}.pt'.format(network, i))
+                    img = Runner._create_result_image(
+                        viz_rgbs, viz_result_rgbs, viz_depth)
 
-    #                     val_metrics[agg_key] += val_lpips_metrics[network]
+                    if self.writer is not None:
+                        self.writer.add_image(
+                            'val/{}'.format(i), T.ToTensor()(img), train_index)
+                    else:
+                        img.save(str(image_path / '{}.jpg'.format(i)))
+                    
+                    if f'visibility_trans_{typ}' in results:
+                        vi_trans = results[f'visibility_trans_{typ}']
+                        vi_trans = vi_trans.squeeze(-1).sum(-1).float()
 
-    #                 viz_result_rgbs = viz_result_rgbs.view(viz_rgbs.shape[0], viz_rgbs.shape[1], 3).cpu()
-    #                 viz_depth = results[f'depth_{typ}']
-    #                 if f'fg_depth_{typ}' in results:
-    #                     to_use = results[f'fg_depth_{typ}'].view(-1)
-    #                     while to_use.shape[0] > 2 ** 24:
-    #                         to_use = to_use[::2]
-    #                     ma = torch.quantile(to_use, 0.95)
+                        vi_trans_vis = Runner.visualize_scalars(
+                            torch.log(vi_trans + 1e-8).view(viz_rgbs.shape[0], viz_rgbs.shape[1]).cpu())
+                        vi_trans_vis = Image.fromarray(vi_trans_vis.astype(np.uint8))
+                        if self.writer is not None:
+                            self.writer.add_image(
+                                'vis_trans/{}'.format(i), T.ToTensor()(vi_trans_vis), train_index)
+                        else:
+                            vi_trans_vis.save(str(trans_path / '{}.jpg'.format(i)))
 
-    #                     viz_depth = viz_depth.clamp_max(ma)
 
-    #                 img = Runner._create_result_image(viz_rgbs, viz_result_rgbs, viz_depth)
+                    del results
 
-    #                 if self.writer is not None:
-    #                     self.writer.add_image('val/{}'.format(i), T.ToTensor()(img), train_index)
-    #                 else:
-    #                     img.save(str(image_path / '{}.jpg'.format(i)))
+                if 'RANK' in os.environ:
+                    dist.barrier()
+                    if self.writer is not None:
+                        for metric_file in metric_path.iterdir():
+                            metric = torch.load(
+                                metric_file, map_location='cpu')
+                            # self.writer.add_scalar(
+                            #     metric['metric_key'], metric['value'], train_index)
+                            val_metrics[metric['agg_key']] += metric['value']
+                        for image_file in image_path.iterdir():
+                            img = Image.open(str(image_file))
+                            self.writer.add_image(
+                                'val/{}'.format(image_file.stem), T.ToTensor()(img), train_index)
+                        
+                        for image_file in trans_path.iterdir():
+                            img = Image.open(str(image_file))
+                            self.writer.add_image(
+                                'vis_trans/{}'.format(image_file.stem), T.ToTensor()(img), train_index)
 
-    #                 if self.hparams.bg_nerf:
-    #                     if f'bg_rgb_{typ}' in results:
-    #                         img = Runner._create_result_image(viz_rgbs,
-    #                                                           results[f'bg_rgb_{typ}'].view(viz_rgbs.shape[0],
-    #                                                                                         viz_rgbs.shape[1],
-    #                                                                                         3).cpu(),
-    #                                                           results[f'bg_depth_{typ}'])
+                        for key in val_metrics:
+                            avg_val = val_metrics[key] / len(self.val_dataset)
+                            self.writer.add_scalar('{}/avg'.format(key), avg_val, 0)
 
-    #                         if self.writer is not None:
-    #                             self.writer.add_image('val/{}_bg'.format(i), T.ToTensor()(img), train_index)
-    #                         else:
-    #                             img.save(str(image_path / '{}_bg.jpg'.format(i)))
+                    dist.barrier()
+                
+                else:
+                    for key in val_metrics:
+                        avg_val = val_metrics[key] / len(self.val_dataset)
+                        self.writer.add_scalar('{}/avg'.format(key), avg_val, 0)
 
-    #                         img = Runner._create_result_image(viz_rgbs,
-    #                                                           results[f'fg_rgb_{typ}'].view(viz_rgbs.shape[0],
-    #                                                                                         viz_rgbs.shape[1],
-    #                                                                                         3).cpu(),
-    #                                                           results[f'fg_depth_{typ}'])
+                self.nerf.train()
+                self.visibility.train()
+            finally:
+                if self.is_master and base_tmp_path is not None:
+                    shutil.rmtree(base_tmp_path)
 
-    #                         if self.writer is not None:
-    #                             self.writer.add_image('val/{}_fg'.format(i), T.ToTensor()(img), train_index)
-    #                         else:
-    #                             img.save(str(image_path / '{}_fg.jpg'.format(i)))
+            return val_metrics
 
-    #                 del results
-
-    #             if 'RANK' in os.environ:
-    #                 dist.barrier()
-    #                 if self.writer is not None:
-    #                     for metric_file in metric_path.iterdir():
-    #                         metric = torch.load(metric_file, map_location='cpu')
-    #                         self.writer.add_scalar(metric['metric_key'], metric['value'], train_index)
-    #                         val_metrics[metric['agg_key']] += metric['value']
-    #                     for image_file in image_path.iterdir():
-    #                         img = Image.open(str(image_file))
-    #                         self.writer.add_image('val/{}'.format(image_file.stem), T.ToTensor()(img), train_index)
-
-    #                     for key in val_metrics:
-    #                         avg_val = val_metrics[key] / len(self.val_items)
-    #                         self.writer.add_scalar('{}/avg'.format(key), avg_val, 0)
-
-    #                 dist.barrier()
-
-    #             self.nerf.train()
-    #         finally:
-    #             if self.is_master and base_tmp_path is not None:
-    #                 shutil.rmtree(base_tmp_path)
-
-    #         return val_metrics
-
-    def _save_checkpoint(self, optimizers: Dict[str, any], scaler: GradScaler, train_index: int,dataset_index:int, chosen_index:int, image_hash:List) -> None:
+    def _save_checkpoint(self, optimizers: Dict[str, any], scaler: GradScaler, train_index: int, dataset_index: int, chosen_index: int, image_hash: List) -> None:
         dict = {
             'model_state_dict': self.nerf.state_dict(),
             'scaler': scaler.state_dict(),
@@ -475,87 +473,73 @@ class Runner:
             'np_random_state': np.random.get_state(),
             'random_state': random.getstate(),
             'dataset_index': dataset_index,
-            'chosen_index':chosen_index,
-            'image_hash':image_hash
+            'chosen_index': chosen_index,
+            'image_hash': image_hash
         }
-
 
         if self.visibility is not None:
             dict['visibility_model_state_dict'] = self.visibility.state_dict()
 
         torch.save(dict, self.model_path / '{}.pt'.format(train_index))
 
-    # def render_image(self, metadata: ImageMetadata) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
-    #     directions = get_ray_directions(metadata.W,
-    #                                     metadata.H,
-    #                                     metadata.intrinsics[0],
-    #                                     metadata.intrinsics[1],
-    #                                     metadata.intrinsics[2],
-    #                                     metadata.intrinsics[3],
-    #                                     self.hparams.center_pixels,
-    #                                     self.device)
+    def render_image(self, batch) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+        flatten_items = torch.hstack(
+            [item.reshape([-1, item.shape[-1]]) for item in batch['rays']])
 
-    #     with torch.cuda.amp.autocast(enabled=self.hparams.amp):
-    #         rays = get_rays(directions, metadata.c2w.to(self.device), self.near, self.far, self.ray_altitude_range)
+        with torch.cuda.amp.autocast(enabled=self.hparams.amp):
+            results = {}
 
-    #         rays = rays.view(-1, 8).to(self.device, non_blocking=True)  # (H*W, 8)
-    #         image_indices = metadata.image_index * torch.ones(rays.shape[0], device=rays.device) \
-    #             if self.hparams.appearance_dim > 0 else None
-    #         results = {}
+            if 'RANK' in os.environ:
+                nerf = self.nerf.module
+            else:
+                nerf = self.nerf
 
-    #         if 'RANK' in os.environ:
-    #             nerf = self.nerf.module
-    #         else:
-    #             nerf = self.nerf
+            if self.visibility is not None and 'RANK' in os.environ:
+                visibility_nerf = self.visibility.module
+            else:
+                visibility_nerf = self.visibility
+            for i in main_tqdm(range(0, flatten_items.shape[0], self.hparams.image_pixel_batch_size)):
+                result_batch = render_rays(nerf=nerf,
+                                           visibility=visibility_nerf if self.visibility is not None else None,
+                                           rays=flatten_items[i:i+self.hparams.image_pixel_batch_size].to(self.device),
+                                           hparams=self.hparams,
+                                           randomized=nerf.training,
+                                           white_bkgd=False
+                                           )
+                for key, value in result_batch.items():
+                    if key not in results:
+                        results[key] = []
 
-    #         if self.bg_nerf is not None and 'RANK' in os.environ:
-    #             bg_nerf = self.bg_nerf.module
-    #         else:
-    #             bg_nerf = self.bg_nerf
+                    results[key].append(value.cpu())
 
-    #         for i in range(0, rays.shape[0], self.hparams.image_pixel_batch_size):
-    #             result_batch, _ = render_rays(nerf=nerf, bg_nerf=bg_nerf,
-    #                                           rays=rays[i:i + self.hparams.image_pixel_batch_size],
-    #                                           image_indices=image_indices[
-    #                                                         i:i + self.hparams.image_pixel_batch_size] if self.hparams.appearance_dim > 0 else None,
-    #                                           hparams=self.hparams,
-    #                                           sphere_center=self.sphere_center,
-    #                                           sphere_radius=self.sphere_radius,
-    #                                           get_depth=True,
-    #                                           get_depth_variance=False,
-    #                                           get_bg_fg_rgb=True)
+            for key, value in results.items():
+                results[key] = torch.cat(value)
 
-    #             for key, value in result_batch.items():
-    #                 if key not in results:
-    #                     results[key] = []
+            return results
 
-    #                 results[key].append(value.cpu())
+    @staticmethod
+    def _create_result_image(rgbs: torch.Tensor, result_rgbs: torch.Tensor, result_depths: torch.Tensor) -> Image:
+        depth_vis = Runner.visualize_scalars(
+            torch.log(result_depths + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
+        images = (rgbs * 255, result_rgbs * 255, depth_vis)
+        return Image.fromarray(np.concatenate(images, 1).astype(np.uint8))
 
-    #         for key, value in results.items():
-    #             results[key] = torch.cat(value)
+    @staticmethod
+    def visualize_scalars(scalar_tensor: torch.Tensor) -> np.ndarray:
+        to_use = scalar_tensor.view(-1)
+        while to_use.shape[0] > 2 ** 24:
+            to_use = to_use[::2]
 
-    #         return results, rays
+        mi = torch.quantile(to_use, 0.05)
+        ma = torch.quantile(to_use, 0.95)
 
-    # @staticmethod
-    # def _create_result_image(rgbs: torch.Tensor, result_rgbs: torch.Tensor, result_depths: torch.Tensor) -> Image:
-    #     depth_vis = Runner.visualize_scalars(torch.log(result_depths + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
-    #     images = (rgbs * 255, result_rgbs * 255, depth_vis)
-    #     return Image.fromarray(np.concatenate(images, 1).astype(np.uint8))
+        scalar_tensor = (scalar_tensor - mi) / \
+            max(ma - mi, 1e-8)  # normalize to 0~1
+        scalar_tensor = scalar_tensor.clamp_(0, 1)
 
-    # @staticmethod
-    # def visualize_scalars(scalar_tensor: torch.Tensor) -> np.ndarray:
-    #     to_use = scalar_tensor.view(-1)
-    #     while to_use.shape[0] > 2 ** 24:
-    #         to_use = to_use[::2]
-
-    #     mi = torch.quantile(to_use, 0.05)
-    #     ma = torch.quantile(to_use, 0.95)
-
-    #     scalar_tensor = (scalar_tensor - mi) / max(ma - mi, 1e-8)  # normalize to 0~1
-    #     scalar_tensor = scalar_tensor.clamp_(0, 1)
-
-    #     scalar_tensor = ((1 - scalar_tensor) * 255).byte().numpy()  # inverse heatmap
-    #     return cv2.cvtColor(cv2.applyColorMap(scalar_tensor, cv2.COLORMAP_INFERNO), cv2.COLOR_BGR2RGB)
+        scalar_tensor = ((1 - scalar_tensor) *
+                         255).byte().numpy()  # inverse heatmap
+        return cv2.cvtColor(cv2.applyColorMap(scalar_tensor, cv2.COLORMAP_INFERNO), cv2.COLOR_BGR2RGB)
 
     def _get_image_metadata(self):
         dataset_path = Path(self.hparams.dataset_path)
@@ -580,12 +564,12 @@ class Runner:
             for val in value:
                 image_hashs_dict[val] = {
                     'tfrecord': key,
-                    'type': 'val',
+                    'type': 'validation',
                     'index': index,
                 }
                 val_hashs_dict[val] = {
                     'tfrecord': key,
-                    'type': 'val',
+                    'type': 'validation',
                     'index': index,
                 }
                 index += 1
