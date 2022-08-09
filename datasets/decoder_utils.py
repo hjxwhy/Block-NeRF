@@ -1,7 +1,8 @@
 import cv2
 import numpy as np
 import tensorflow as tf
-
+import torch
+from einops import rearrange
 
 
 def namedtuple_map(fn, tup):
@@ -65,3 +66,27 @@ def _parse_fn(record_bytes):
         "mask": tf.io.VarLenFeature(tf.int64),
     },
 )
+
+# @torch.cuda.amp.autocast(dtype=torch.float32)
+def axisangle_to_R(v):
+    """
+    Convert an axis-angle vector to rotation matrix
+    from https://github.com/ActiveVisionLab/nerfmm/blob/main/utils/lie_group_helper.py#L47
+
+    Inputs:
+        v: (B, 3)
+    
+    Outputs:
+        R: (B, 3, 3)
+    """
+    zero = torch.zeros_like(v[:, :1]) # (B, 1)
+    skew_v0 = torch.cat([zero, -v[:, 2:3], v[:, 1:2]], 1) # (B, 3)
+    skew_v1 = torch.cat([v[:, 2:3], zero, -v[:, 0:1]], 1)
+    skew_v2 = torch.cat([-v[:, 1:2], v[:, 0:1], zero], 1)
+    skew_v = torch.stack([skew_v0, skew_v1, skew_v2], dim=1) # (B, 3, 3)
+
+    norm_v = rearrange(torch.norm(v, dim=1)+1e-7, 'b -> b 1 1')
+    eye = torch.eye(3, device=v.device)
+    R = eye + (torch.sin(norm_v)/norm_v)*skew_v + \
+        ((1-torch.cos(norm_v))/norm_v**2)*(skew_v@skew_v)
+    return R

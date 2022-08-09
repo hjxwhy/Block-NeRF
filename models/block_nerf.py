@@ -7,7 +7,8 @@ from models.mip_nerf import MipNerf, Visibility
 from models.mip import rearrange_render_image
 from utils.metrics import calc_psnr
 # from datasets import dataset_dict
-from datasets.filesystem_dataset import FilesystemDataset
+from datasets.filesystem_dataset import FilesystemDataset, Rays
+from datasets.decoder_utils import axisangle_to_R
 from utils.lr_schedule import MipLRDecay
 from torch.utils.data import DataLoader
 from utils.vis import stack_rgb, visualize_depth
@@ -32,16 +33,33 @@ class BlockNeRFSystem(LightningModule):
             'visib':Visibility()
         }
         self.mip_nerf = MipNerf(**kwargs)
+
+        if self.hparams['optimize_ext']:
+            N = len(self.image_hashs_dict)
+            self.register_parameter('dR',
+                torch.nn.Parameter(torch.zeros(N, 3, device=self.device)))
+            self.register_parameter('dT',
+                torch.nn.Parameter(torch.zeros(N, 3, device=self.device)))        
         # self.visib = Visibility()
 
     def forward(self, batch_rays: torch.Tensor, randomized: bool, white_bkgd: bool=False):
+        if self.hparams['optimize_ext']:
+            dR = axisangle_to_R(self.dR[batch_rays.image_indices.long().squeeze(-1)])
+            dt = self.dT[batch_rays.image_indices.long().squeeze(-1)]
+            directions = (batch_rays.directions.unsqueeze(1) @ dR.permute([0, 2, 1])).squeeze(1)
+            origins = batch_rays.origins + dt
+            batch_rays = Rays(origins, directions, directions, batch_rays.radii, batch_rays.lossmult, batch_rays.near, batch_rays.far, batch_rays.image_indices, batch_rays.exposures)
+
         res = self.mip_nerf(batch_rays, randomized, white_bkgd)  # num_layers result
         return res
 
     def setup(self, stage):
         dataset = FilesystemDataset
-        self.train_dataset = dataset(self.image_hashs_dict, self.hparams['data_path'], self.hparams['img_nums'])
-        self.val_dataset = dataset(self.val_hashs_dict, self.hparams['data_path'], self.hparams['img_nums'], split='val')
+        self.train_dataset = dataset(self.image_hashs_dict, self.hparams['data_path'], self.hparams['img_nums'],\
+                                     near=self.hparams['near'], far=self.hparams['far'])
+        self.val_dataset = dataset(self.val_hashs_dict, self.hparams['data_path'], self.hparams['img_nums'], \
+                                     near=self.hparams['near'], far=self.hparams['far'], split='val')
+        
         self.refresh_datasets()
 
 
@@ -127,6 +145,16 @@ class BlockNeRFSystem(LightningModule):
        
         loss += 1e-6 * (mask *(ret[f'visib_trans_fine'].squeeze(-1)-ret[f'trans_fine'].detach())**2).sum() / mask.sum()
         loss += self.hparams['loss.coarse_loss_mult'] * 1e-6 * (mask *(ret[f'visib_trans_coarse'].squeeze(-1)-ret[f'trans_coarse'].detach())**2).sum() / mask.sum()
+        
+        if self.hparams['optimize_ext']:
+            dR = self.dR[rays.image_indices.long().squeeze(-1)]
+            dt = self.dT[rays.image_indices.long().squeeze(-1)]
+            if self.global_step < 10000:
+                # TODO this is may be a hyper param, the paper said 5000 steps
+                loss += 1e5 * ((dR**2).mean() + (dt**2).mean())
+            else:
+                scale = (0.1 - 1e5) * (self.global_step-10000)/(self.hparams['optimizer.max_steps']-10000) + 1e5
+                loss += scale * ((dR**2).mean() + (dt**2).mean())
 
         with torch.no_grad():
             psnr_fine = calc_psnr(ret['rgb_fine'], rgbs[..., :3])

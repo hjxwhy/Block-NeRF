@@ -1,5 +1,6 @@
 import os
 import sys
+from turtle import pos
 import numpy as np
 from scipy.spatial import distance
 import argparse
@@ -88,7 +89,7 @@ def split_dataset(output_path, radius=2, overlap=0.5, prefix=None):
         for vals in datasets_meta.values():
             for val in vals.values():
                 positions.append(val['ray_origins'])
-    positions = np.array(positions)
+    positions = np.array(positions) * 100 # I guess the position in waymo data was normalize by 100
     if data_split == 'train':
         centroids = get_centroids(positions, 2*radius*overlap)
     else:
@@ -102,9 +103,9 @@ def split_dataset(output_path, radius=2, overlap=0.5, prefix=None):
     # plot_cicle(centroids, positions)
     print('Load {} images'.format(len(positions)))
     print('Split to {} blocks.......'.format(len(centroids)))
-    if os.path.exists(Path(output_path)/('blocks_meta_'+ data_split +'.json')):
-        print('exists blocks_mata.json in {}, return.....'.format(output_path))
-        return positions, centroids
+    # if os.path.exists(Path(output_path)/('blocks_meta_'+ data_split +'.json')):
+    #     print('exists blocks_mata.json in {}, return.....'.format(output_path))
+    #     return positions, centroids
     # scipy.spatial.distance.cdist
     blocks = {}
     blocks_dicts = {}
@@ -113,7 +114,7 @@ def split_dataset(output_path, radius=2, overlap=0.5, prefix=None):
         sub_position = []
         for val in value.values():
             sub_position.append(val['ray_origins'])
-        sub_position = np.array(sub_position)
+        sub_position = np.array(sub_position) * 100 # TODO
         dist = distance.cdist(sub_position, centroids, 'euclidean')
         for i in range(len(centroids)):
             if blocks.get(i) is None:
@@ -140,14 +141,20 @@ def get_centroids(positions, radius=2):
     indices = np.argsort(positions[:, 0:1], axis=0)
     positions = positions[indices, :][:, 0, :]
     centroids = []
+    positions_copy = np.copy(positions) 
+
     for position in positions[:-1, :]:
         if len(centroids) == 0:
             centroids.append(position)
         else:
-            dis = np.linalg.norm(centroids[-1] - position)
-            if dis > radius:
-                centroids.append(position)
-    centroids.append(positions[-1])
+            dis = np.linalg.norm(centroids[-1] - positions, axis=-1)
+            positions = positions[dis>radius, :]
+            if (len(positions) == 0): break
+            dis = np.linalg.norm(centroids[-1] - positions, axis=-1)
+            arg_min = np.argmin(dis)
+            centroids.append(positions[arg_min])
+    dis = np.linalg.norm(centroids[-1] - positions_copy, axis=-1)
+    centroids.append(positions_copy[np.argmin(dis)])
     return np.array(centroids)
 
 
@@ -162,10 +169,6 @@ def plot_cicle(centroids, pos, radius=2):
         x, y = c[:-1]
         ax.plot(x, y, 'ro')
     plt.scatter(pos[:, 0], pos[:, 1])
-    plt.axis('scaled')
-    # changes limits of x or y axis so that equal increments of x and y have the same length
-    plt.axis('equal')
-
     plt.show()
 
 
@@ -177,7 +180,7 @@ def main(args):
             save_datasets_info(args.datasets_path, args.output_path, prefix)
             positions, centroids = split_dataset(args.output_path, args.radius, args.overlap, prefix)
         else:
-            assert os.path.exists(Path(args.output_path)/'datasets_meta.json'), 'please generate meta json, set split_only false'
+            assert os.path.exists(Path(args.output_path)/f'datasets_meta_{s}.json'), 'please generate meta json, set split_only false'
             positions, centroids = split_dataset(args.output_path, args.radius, args.overlap, prefix)
     if args.visualize:
         plot_cicle(centroids, positions, args.radius)

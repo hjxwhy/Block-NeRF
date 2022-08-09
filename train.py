@@ -37,7 +37,7 @@ def main(hparams):
                               save_last=True,
                               monitor='val/psnr',
                               mode='max',
-                              save_top_k=2,
+                              save_top_k=1,
                               )
     pbar = TQDMProgressBar(refresh_rate=1)
     callbacks = [ckpt_cb, pbar]

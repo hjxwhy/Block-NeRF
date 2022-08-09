@@ -3,8 +3,11 @@ num_gpus: 1
 img_nums: 1
 block_id: 3
 exp_name: 'waymo'
+near: 1.
+far: 1000.
+optimize_ext: True
 train:
-  batch_size: 3072
+  batch_size: 1024
   batch_type: 'all_images'  # single_image: inputs a full image; all_images: inputs batch_size rays sampled from different image
   num_work: 4
   randomized: True
@@ -19,7 +22,7 @@ val:
   chunk_size: 5120  # The amount of input rays in a forward propagation
   sample_num: 4  # Total number of images verified during once validation
 nerf:
-  num_samples: 10  # The number of samples per level.
+  num_samples: 256  # The number of samples per level.
   num_levels: 2  # The number of sampling levels.
   resample_padding: 0.01  # Dirichlet/alpha "padding" on the histogram.
   stop_resample_grad: True  # If True, don't backprop across levels')
@@ -38,7 +41,7 @@ nerf:
   append_identity: Ture  # If True, append original view direction features
   mlp:
     net_depth: 8  # The depth of the first part of MLP.
-    net_width: 10  # The width of the first part of MLP.
+    net_width: 516  # The width of the first part of MLP.
     net_depth_condition: 1  # The depth of the second part of MLP.
     net_width_condition: 128  # The width of the second part of MLP.
     net_activation: 'relu'  # The activation function.

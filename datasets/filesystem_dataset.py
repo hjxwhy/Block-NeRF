@@ -21,7 +21,7 @@ def namedtuple_map(fn, tup):
     return type(tup)(*map(fn, tup))
 
 class FilesystemDataset(Dataset):
-    def __init__(self, metadata_dicts: Dict, data_root:str, img_nums: int, split:str = 'train'):
+    def __init__(self, metadata_dicts: Dict, data_root:str, img_nums: int, near:float, far:float, split:str = 'train'):
         super(FilesystemDataset, self).__init__()
         self.metadata_dicts = metadata_dicts
         self.image_hash = list(metadata_dicts.keys())
@@ -36,6 +36,8 @@ class FilesystemDataset(Dataset):
         self.resume_from_ckpt = False
         self._chunk_load_executor = ThreadPoolExecutor(max_workers=1)
         self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
+        self.near = near
+        self.far = far
 
 
     def load_chunk(self) -> None:
@@ -128,8 +130,8 @@ class FilesystemDataset(Dataset):
                     directions.append(direction)
                     image_indices.append(np.ones_like(batch['ray_origins'][...,0:1])*it['index'])
                     exposures.append(np.ones_like(batch['ray_origins'][...,0:1])*batch['equivalent_exposure'])
-                    nears.append(np.ones_like(batch['ray_origins'][...,0:1])*1)
-                    fars.append(np.ones_like(batch['ray_origins'][...,0:1])*1000)
+                    nears.append(np.ones_like(batch['ray_origins'][...,0:1])*self.near)
+                    fars.append(np.ones_like(batch['ray_origins'][...,0:1])*self.far)
                     if len(batch['mask']) > 0:
                         masks.append(batch['mask'])
                     else:
