@@ -30,8 +30,7 @@ def render_rays(nerf: nn.Module,
                 visibility: Optional[nn.Module],
                 rays: torch.Tensor,
                 hparams: Namespace,
-                randomized:bool,
-                white_bkgd:bool=True,
+                randomized:bool
                 ):# -> Tuple[Dict[str, torch.Tensor], bool]:
     #rays: ray_origins[i], directions[i], radiis[i], image_indices[i], exposures[i], mask[i](option)
     ret = {}
@@ -94,7 +93,7 @@ def render_rays(nerf: nn.Module,
                 density,
                 t_samples,
                 rays[:,3:6],
-                white_bkgd=white_bkgd,
+                white_bkgd=hparams.white_bkgd,
             )
             ret[f'rgb_{stage}'] = comp_rgb
             ret[f'depth_{stage}'] = distance

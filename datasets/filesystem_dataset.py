@@ -7,7 +7,7 @@ import numpy as np
 import tensorflow as tf
 from torch.utils.data import Dataset
 from typing import Tuple, List, Optional, Dict, Union
-from .decoder_utils import _decoder_tf, _parse_fn, _flatten, _decoder
+from decoder_utils import _decoder_tf, _parse_fn, _flatten, _decoder
 from tfrecord.torch.dataset import TFRecordDataset
 class FilesystemDataset(Dataset):
     def __init__(self, metadata_dicts: Dict, data_root:str, img_nums: int, split:str = 'train'):
@@ -105,6 +105,7 @@ class FilesystemDataset(Dataset):
                     ray_origins.append(batch['ray_origins'])
                     radiis.append(radii)
                     directions.append(direction)
+                    print(direction)
                     image_indices.append(np.ones_like(batch['ray_origins'][...,0:1])*it['index'])
                     exposures.append(np.ones_like(batch['ray_origins'][...,0:1])*batch['equivalent_exposure'])
                     if len(batch['mask']) > 0 and self.split!='train':

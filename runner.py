@@ -27,13 +27,8 @@ from torchvision import transforms as T
 from tqdm import tqdm
 
 from datasets.filesystem_dataset import FilesystemDataset
-# from mega_nerf.datasets.memory_dataset import MemoryDataset
-# from mega_nerf.datasets.dataset_utils import get_rgb_index_mask
-# from mega_nerf.image_metadata import ImageMetadata
 from metrics import psnr, ssim, lpips
-# from mega_nerf.misc_utils import main_print, main_tqdm
 from models.model_utils import get_nerf, get_visibility
-# from mega_nerf.ray_utils import get_rays, get_ray_directions
 from models.mip import *
 from models.lr_schedule import MipLRDecay
 from rendering import render_rays
@@ -164,7 +159,7 @@ class Runner:
                 self.train_items, self.hparams.dataset_path, self.hparams.img_nums)
             
             self.val_dataset = FilesystemDataset(
-                self.val_items, self.hparams.dataset_path, 1, split='val')
+                self.val_items, self.hparams.dataset_path, 4, split='val')
 
             if self.hparams.ckpt_path is not None and self.hparams.resume_ckpt_state:
                 dataset.set_state(checkpoint['chosen_index'], checkpoint['image_hash'])
@@ -185,10 +180,9 @@ class Runner:
 
             if 'RANK' in os.environ:
                 world_size = int(os.environ['WORLD_SIZE'])
-                sampler = DistributedSampler(
-                    dataset, world_size, int(os.environ['RANK']))
+                sampler = DistributedSampler(dataset, world_size, int(os.environ['RANK']))
                 assert self.hparams.batch_size % world_size == 0
-                data_loader = DataLoader(dataset, batch_size=self.hparams.batch_size // world_size, sampler=sampler,
+                data_loader = DataLoader(dataset, batch_size=self.hparams.batch_size, sampler=sampler,
                                          num_workers=6, pin_memory=True)
             else:
                 data_loader = DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=True, num_workers=6,
@@ -343,7 +337,7 @@ class Runner:
             data_loader = DataLoader(self.val_dataset, batch_size=1, sampler=sampler,
                                      num_workers=6, pin_memory=True)
         else:
-            data_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=True, num_workers=6,
+            data_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=False, num_workers=6,
                                      pin_memory=True)
         with torch.inference_mode():
             self.nerf.eval()
@@ -353,15 +347,10 @@ class Runner:
             base_tmp_path = None
             try:
                 if 'RANK' in os.environ:
-                    base_tmp_path = Path(
-                        self.hparams.exp_name) / os.environ['TORCHELASTIC_RUN_ID']
+                    base_tmp_path = Path(self.hparams.exp_name) / os.environ['TORCHELASTIC_RUN_ID']
                     metric_path = base_tmp_path / 'tmp_val_metrics'
                     image_path = base_tmp_path / 'tmp_val_images'
                     trans_path = base_tmp_path / 'tmp_val_trans'
-
-                    world_size = int(os.environ['WORLD_SIZE'])
-                    indices_to_eval = np.arange(
-                        int(os.environ['RANK']), len(self.val_items), world_size)
                     if self.is_master:
                         base_tmp_path.mkdir()
                         metric_path.mkdir()

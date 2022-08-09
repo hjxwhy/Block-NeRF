@@ -49,7 +49,8 @@ class MLP(torch.nn.Module):
     """
 
     def __init__(self, net_depth: int, net_width: int, net_depth_condition: int, net_width_condition: int,
-                 skip_index: int, num_rgb_channels: int, xyz_dim: int, view_dim: int, appearance_dim: int, appearance_count: int):
+                 skip_index: int, num_rgb_channels: int, xyz_dim: int, view_dim: int, 
+                 appearance_dim: int, appearance_count: int):
         """
           net_depth: The depth of the first part of MLP.
           net_width: The width of the first part of MLP.

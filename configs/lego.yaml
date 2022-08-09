@@ -1,9 +1,14 @@
-near: 1
-far: 1000
-num_samples: 56
+near: 2
+far: 6
+num_samples: 128
 max_deg_point: 16
 deg_view: 4
 deg_exposure: 4
-batch_size: 10
-img_nums: 5
+batch_size: 1024
+img_nums: 10
+lr: 5e-4
+lr_final: 5e-6
+lr_delay_steps: 2500
+white_bkgd: True
+train_iterations: 300000
 # ckpt_path: /home/hjx/Block-NeRF/block_test/0/models/10.pt
