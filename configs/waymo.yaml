@@ -1,23 +1,25 @@
 seed: 4
 num_gpus: 1
-exp_name: 'lego'
+img_nums: 1
+block_id: 3
+exp_name: 'waymo'
 train:
   batch_size: 3072
   batch_type: 'all_images'  # single_image: inputs a full image; all_images: inputs batch_size rays sampled from different image
   num_work: 4
   randomized: True
-  white_bkgd: True
+  white_bkgd: False
 val:
   batch_size: 1
   batch_type: 'single_image'  # For "single_image", the batch must set to 1
   num_work: 4
   randomized: False
-  white_bkgd: True
-  check_interval: 10000
-  chunk_size: 8192  # The amount of input rays in a forward propagation
+  white_bkgd: False
+  check_interval: 434
+  chunk_size: 5120  # The amount of input rays in a forward propagation
   sample_num: 4  # Total number of images verified during once validation
 nerf:
-  num_samples: 128  # The number of samples per level.
+  num_samples: 10  # The number of samples per level.
   num_levels: 2  # The number of sampling levels.
   resample_padding: 0.01  # Dirichlet/alpha "padding" on the histogram.
   stop_resample_grad: True  # If True, don't backprop across levels')
@@ -36,13 +38,16 @@ nerf:
   append_identity: Ture  # If True, append original view direction features
   mlp:
     net_depth: 8  # The depth of the first part of MLP.
-    net_width: 256  # The width of the first part of MLP.
+    net_width: 10  # The width of the first part of MLP.
     net_depth_condition: 1  # The depth of the second part of MLP.
     net_width_condition: 128  # The width of the second part of MLP.
     net_activation: 'relu'  # The activation function.
     skip_index: 4  # Add a skip connection to the output of every N layers.
     num_rgb_channels: 3  # The number of RGB channels.
     num_density_channels: 1  # The number of density channels.
+    deg_exposure: 4
+    appearance_dim: 32
+
 optimizer:
   lr_init: 5e-4  # The initial learning rate.
   lr_final: 5e-6  # The final learning rate.

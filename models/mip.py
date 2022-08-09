@@ -1,7 +1,10 @@
 import torch
 from einops import rearrange
 import numpy as np
+# from datasets.datasets import Rays_keys, Rays
+from datasets.filesystem_dataset import Rays_keys, Rays
 from functorch import jacrev, vmap
+
 
 def distloss(weight, samples):
     '''
@@ -122,7 +125,7 @@ def sample_along_rays_360(origins, directions, radii, num_samples, near, far, ra
     return t_inv, (means, covs)
 
 
-def sample_along_rays(origins, directions, radii, num_samples, near, far, randomized, disparity, ray_shape='cone'):
+def sample_along_rays(origins, directions, radii, num_samples, near, far, randomized, disparity, ray_shape):
     """
     Stratified sampling along the rays.
     Args:
@@ -227,8 +230,8 @@ def sorted_piecewise_constant_pdf(bins, weights, num_samples, randomized):
     return samples
 
 
-def resample_along_rays(origins, directions, radii, t_samples, weights, randomized, ray_shape='cone', stop_grad=True,
-                        resample_padding=0.01):
+def resample_along_rays(origins, directions, radii, t_samples, weights, randomized, ray_shape, stop_grad,
+                        resample_padding):
     """Resampling.
     Args:
         origins: torch.Tensor, [batch_size, 3], ray origins.
@@ -393,10 +396,30 @@ def volumetric_rendering(rgb, density, t_samples, dirs, white_bkgd):
     comp_rgb = (torch.unsqueeze(weights, dim=-1) * rgb).sum(axis=-2)  # [B, N, 1] * [B, N, 3] -> [B, 3]
     acc = weights.sum(axis=-1)
     distance = (weights * t_mids).sum(axis=-1)
-    # distance = torch.clamp(torch.nan_to_num(distance), t_samples[:, 0], t_samples[:, -1])
+    distance = torch.clamp(torch.nan_to_num(distance), t_samples[:, 0], t_samples[:, -1])
     if white_bkgd:
         comp_rgb = comp_rgb + (1. - torch.unsqueeze(acc, dim=-1))
-    return comp_rgb, distance, weights, trans
+    return comp_rgb, distance, acc, weights, trans
+
+
+def rearrange_render_image(rays, chunk_size=4096):
+    # change Rays to list: [origins, directions, viewdirs, radii, lossmult, near, far]
+    single_image_rays = [getattr(rays, key) for key in Rays_keys]
+    val_mask = single_image_rays[-3]
+
+    # flatten each Rays attribute and put on device
+    single_image_rays = [rays_attr.reshape(-1, rays_attr.shape[-1]) for rays_attr in single_image_rays]
+    # get the amount of full rays of an image
+    length = single_image_rays[0].shape[0]
+    # divide each Rays attr into N groups according to chunk_size,
+    # the length of the last group <= chunk_size
+    single_image_rays = [[rays_attr[i:i + chunk_size] for i in range(0, length, chunk_size)] for
+                         rays_attr in single_image_rays]
+    # get N, the N for each Rays attr is the same
+    length = len(single_image_rays[0])
+    # generate N Rays instances
+    single_image_rays = [Rays(*[rays_attr[i] for rays_attr in single_image_rays]) for i in range(length)]
+    return single_image_rays, val_mask
 
 
 def contract(x):

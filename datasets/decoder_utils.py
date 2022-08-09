@@ -2,6 +2,12 @@ import cv2
 import numpy as np
 import tensorflow as tf
 
+
+
+def namedtuple_map(fn, tup):
+    """Apply `fn` to each element of `tup` and cast to `tup`'s namedtuple."""
+    return type(tup)(*map(fn, tup))
+
 def _flatten(x):
     rays = []
     for items in x:

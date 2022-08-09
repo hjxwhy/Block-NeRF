@@ -7,8 +7,19 @@ import numpy as np
 import tensorflow as tf
 from torch.utils.data import Dataset
 from typing import Tuple, List, Optional, Dict, Union
-from decoder_utils import _decoder_tf, _parse_fn, _flatten, _decoder
+from .decoder_utils import _decoder_tf, _parse_fn, _flatten, _decoder
 from tfrecord.torch.dataset import TFRecordDataset
+
+import collections
+Rays = collections.namedtuple(
+    'Rays',
+    ('origins', 'directions', 'viewdirs', 'radii', 'lossmult', 'near', 'far', 'image_indices', 'exposures'))
+Rays_keys = Rays._fields
+
+def namedtuple_map(fn, tup):
+    """Apply `fn` to each element of `tup` and cast to `tup`'s namedtuple."""
+    return type(tup)(*map(fn, tup))
+
 class FilesystemDataset(Dataset):
     def __init__(self, metadata_dicts: Dict, data_root:str, img_nums: int, split:str = 'train'):
         super(FilesystemDataset, self).__init__()
@@ -28,6 +39,7 @@ class FilesystemDataset(Dataset):
 
 
     def load_chunk(self) -> None:
+        # self._loaded_rays, self._loaded_rgbs, self.chosen_index = self._load_chunk_inner()
         self._loaded_rays, self._loaded_rgbs, self.chosen_index = self._chunk_future.result()
         self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
     
@@ -49,6 +61,14 @@ class FilesystemDataset(Dataset):
         dx = np.concatenate([dx, dx[-2:-1, :]], 0)
         radii = dx[..., None] * 2 / np.sqrt(12)
         return radii
+    
+    def _flatten(self, x):
+        # Always flatten out the height x width dimensions
+        x = [y.reshape([-1, y.shape[-1]]) for y in x]
+        if self.split == 'train':
+            # If global batching, also concatenate all data into one list
+            x = np.concatenate(x, axis=0)
+        return x
 
     def _load_chunk_inner(self):
         if self.resume_from_ckpt:
@@ -74,6 +94,8 @@ class FilesystemDataset(Dataset):
         image_indices = []
         exposures = []
         masks = []
+        nears = []
+        fars = []
         for key, value in chunk_dict.items():
             tfrecord_path = self.dataset_dir / (self.prefix+key)
             # dataset = tf.data.TFRecordDataset(
@@ -81,7 +103,6 @@ class FilesystemDataset(Dataset):
             #     compression_type="GZIP",
             # )
             # dataset_map = dataset.map(_parse_fn)
-
             dataset_map = TFRecordDataset(tfrecord_path, index_path=None, compression_type="gzip", transform=_decoder)
             
             
@@ -105,32 +126,39 @@ class FilesystemDataset(Dataset):
                     ray_origins.append(batch['ray_origins'])
                     radiis.append(radii)
                     directions.append(direction)
-                    print(direction)
                     image_indices.append(np.ones_like(batch['ray_origins'][...,0:1])*it['index'])
                     exposures.append(np.ones_like(batch['ray_origins'][...,0:1])*batch['equivalent_exposure'])
-                    if len(batch['mask']) > 0 and self.split!='train':
+                    nears.append(np.ones_like(batch['ray_origins'][...,0:1])*1)
+                    fars.append(np.ones_like(batch['ray_origins'][...,0:1])*1000)
+                    if len(batch['mask']) > 0:
                         masks.append(batch['mask'])
+                    else:
+                        masks.append(np.ones_like(batch['ray_origins'][...,0:1]))
 
-        rays = []
-        for i in range(len(images)):
-            item = [ray_origins[i], directions[i], radiis[i], image_indices[i], exposures[i]]
-            if self.split != 'train':
-                item.append(masks[i])
-            rays.append(item)
-        del ray_origins, radiis, directions, image_indices, masks, exposures
+        
+        rays = Rays(
+            origins=ray_origins,
+            directions=directions,
+            viewdirs=directions,
+            radii=radiis,
+            lossmult=masks,
+            near=nears,
+            far=fars,
+            image_indices=image_indices,
+            exposures=exposures)
+
         if self.split == 'train':
-            rays = _flatten(rays)
-            images = np.concatenate([img.reshape([-1, 3]) for img in images], dtype=np.float32)
+            images = self._flatten(images)
+            rays = namedtuple_map(self._flatten, rays)
+
         return rays, images, next_index
 
     def __len__(self):
-        return len(self._loaded_rays)
+        return len(self._loaded_rgbs)
 
-    def __getitem__(self, idx):
-        return {
-            'rgbs': self._loaded_rgbs[idx],
-            'rays': self._loaded_rays[idx],
-        }
+    def __getitem__(self, index):
+        rays = Rays(*[getattr(self._loaded_rays, key)[index] for key in Rays_keys])
+        return rays, self._loaded_rgbs[index]
 
    
 
@@ -169,15 +197,15 @@ if __name__ == '__main__':
             }
             index+=1
 
-    filesystem = FilesystemDataset(val_hashs_dict, '/home/hjx/Documents/nerf/block_nerf', 5, 'val')
+    filesystem = FilesystemDataset(image_hashs_dict, '/home/hjx/Documents/nerf/block_nerf', 5, 'val')
     from torch.utils.data import DistributedSampler, DataLoader
     # data_loader = DataLoader(filesystem, batch_size=1, shuffle=True, num_workers=6,
     #                                     pin_memory=True)
     for _ in range(10):
         t1 = time.time()
         filesystem.load_chunk()
-        data_loader = DataLoader(filesystem, batch_size=1, shuffle=False, num_workers=6,
-                                        pin_memory=True)
-        for batch in data_loader:
-            print(len(batch['rays']))
+        # data_loader = DataLoader(filesystem, batch_size=1, shuffle=False, num_workers=6,
+        #                                 pin_memory=True)
+        # for batch in data_loader:
+        #     print(len(batch['rays']))
         print(time.time()-t1)

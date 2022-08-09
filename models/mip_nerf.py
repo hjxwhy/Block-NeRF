@@ -1,8 +1,8 @@
 import torch
-# from einops import repeat, rearrange
-from .mip import sample_along_rays, integrated_pos_enc, pos_enc, volumetric_rendering, resample_along_rays
-# from collections import namedtuple
-
+from einops import repeat
+from models.mip import sample_along_rays, integrated_pos_enc, pos_enc, volumetric_rendering, resample_along_rays
+from collections import namedtuple
+from typing import Optional
 
 def _xavier_init(linear):
     """
@@ -10,9 +10,9 @@ def _xavier_init(linear):
     """
     torch.nn.init.xavier_uniform_(linear.weight.data)
 
-
 class Visibility(torch.nn.Module):
-    def __init__(self, net_depth: int = 4,
+    def __init__(self, 
+                 net_depth: int = 4,
                  net_width: int = 128,
                  max_deg_point: int = 16,
                  deg_view: int = 4,
@@ -40,8 +40,9 @@ class Visibility(torch.nn.Module):
         self.visibility = torch.nn.Sequential(*layers)
 
     def forward(self, xyz, view_direction):
+        _, num_samples, _ = xyz.shape
+        view_direction = repeat(view_direction, 'batch feature -> batch sample feature', sample=num_samples)
         return self.visibility(torch.cat([xyz, view_direction], -1))
-
 
 class MLP(torch.nn.Module):
     """
@@ -49,21 +50,20 @@ class MLP(torch.nn.Module):
     """
 
     def __init__(self, net_depth: int, net_width: int, net_depth_condition: int, net_width_condition: int,
-                 skip_index: int, num_rgb_channels: int, xyz_dim: int, view_dim: int, 
-                 appearance_dim: int, appearance_count: int):
+                 skip_index: int, num_rgb_channels: int, num_density_channels: int, activation: str,
+                 xyz_dim: int, view_dim: int, appearance_dim: int=0, appearance_count: int=0, *kwargs):
         """
           net_depth: The depth of the first part of MLP.
           net_width: The width of the first part of MLP.
           net_depth_condition: The depth of the second part of MLP.
           net_width_condition: The width of the second part of MLP.
+          activation: The activation function.
           skip_index: Add a skip connection to the output of every N layers.
           num_rgb_channels: The number of RGB channels.
-          appearance_dim: int, dimention of appearance
-          appearance_count: int, numbers of image in a block
+          num_density_channels: The number of density channels.
         """
         super(MLP, self).__init__()
-        # Add a skip connection to the output of every N layers.
-        self.skip_index: int = skip_index
+        self.skip_index: int = skip_index  # Add a skip connection to the output of every N layers.
         layers = []
         for i in range(net_depth):
             if i == 0:
@@ -77,13 +77,15 @@ class MLP(torch.nn.Module):
                 dim_out = net_width
             linear = torch.nn.Linear(dim_in, dim_out)
             _xavier_init(linear)
-            layers.append(torch.nn.Sequential(linear, torch.nn.ReLU(True)))
+            if activation == 'relu':
+                layers.append(torch.nn.Sequential(linear, torch.nn.ReLU(True)))
+            else:
+                raise NotImplementedError
         self.layers = torch.nn.ModuleList(layers)
         del layers
-        self.density_layer = torch.nn.Linear(net_width, 1)
+        self.density_layer = torch.nn.Linear(net_width, num_density_channels)
         _xavier_init(self.density_layer)
-        # extra_layer is not the same as NeRF
-        self.extra_layer = torch.nn.Linear(net_width, net_width)
+        self.extra_layer = torch.nn.Linear(net_width, net_width)  # extra_layer is not the same as NeRF
         _xavier_init(self.extra_layer)
         layers = []
         for i in range(net_depth_condition):
@@ -95,23 +97,26 @@ class MLP(torch.nn.Module):
                 dim_out = net_width_condition
             linear = torch.nn.Linear(dim_in, dim_out)
             _xavier_init(linear)
-            layers.append(torch.nn.Sequential(linear, torch.nn.ReLU(True)))
+            if activation == 'relu':
+                layers.append(torch.nn.Sequential(linear, torch.nn.ReLU(True)))
+            else:
+                raise NotImplementedError
         self.view_layers = torch.nn.Sequential(*layers)
         del layers
-        self.color_layer = torch.nn.Linear(
-            net_width_condition, num_rgb_channels)
+        self.color_layer = torch.nn.Linear(net_width_condition, num_rgb_channels)
 
+        
         if appearance_dim > 0:
             self.embedding_a = torch.nn.Embedding(
                 appearance_count, appearance_dim)
         else:
             self.embedding_a = None
 
-    def forward(self, x, view_direction, appearance_id=None, exposure=None):
+    def forward(self, x, view_direction=None, exposure=None, appearance_id=None):
         """Evaluate the MLP.
 
         Args:
-            x: torch.Tensor(float32), [batch, feature], points.
+            x: torch.Tensor(float32), [batch, num_samples, feature], points.
             view_direction: torch.Tensor(float32), [batch, feature], if not None, this
             variable will be part of the input to the second part of the MLP
             concatenated with the output vector of the first part of the MLP. If
@@ -124,8 +129,8 @@ class MLP(torch.nn.Module):
             raw_density: torch.Tensor(float32), with a shape of
                 [batch, num_samples, num_density_channels].
         """
-        # num_samples = x.shape[1]
-        inputs = x  # [B, 2*3*L]
+        num_samples = x.shape[1]
+        inputs = x  # [B, N, 2*3*L]
         for i, layer in enumerate(self.layers):
             x = layer(x)
             if i % self.skip_index == 0 and i > 0:
@@ -134,11 +139,20 @@ class MLP(torch.nn.Module):
         if view_direction is not None:
             # Output of the first part of MLP.
             bottleneck = self.extra_layer(x)
+            # Broadcast condition from [batch, feature] to
+            # [batch, num_samples, feature] since all the samples along the same ray have the same viewdir.
+            # view_direction: [B, 2*3*L] -> [B, N, 2*3*L]
+            view_direction = repeat(view_direction, 'batch feature -> batch sample feature', sample=num_samples)
             fc_input = [bottleneck, view_direction]
+            
             if exposure is not None:
+                exposure = repeat(exposure, 'batch feature -> batch sample feature', sample=num_samples)
                 fc_input.append(exposure)
             if self.embedding_a is not None:
+                appearance_id = repeat(appearance_id, 'batch feature -> batch (sample feature)', sample=num_samples)
+
                 fc_input.append(self.embedding_a(appearance_id.long()))
+
             x = torch.cat(fc_input, dim=-1)
             # Here use 1 extra layer to align with the original nerf model.
             x = self.view_layers(x)
@@ -149,71 +163,170 @@ class MLP(torch.nn.Module):
 class MipNerf(torch.nn.Module):
     """Nerf NN Model with both coarse and fine MLPs."""
 
-    def __init__(self,
+    def __init__(self, num_samples: int = 128,
+                 num_levels: int = 2,
+                 resample_padding: float = 0.01,
+                 stop_resample_grad: bool = True,
+                 use_viewdirs: bool = True,
+                 disparity: bool = False,
+                 ray_shape: str = 'cone',
+                 min_deg_point: int = 0,
                  max_deg_point: int = 16,
                  deg_view: int = 4,
+                 density_activation: str = 'softplus',
                  density_noise: float = 0.,
                  density_bias: float = -1.,
+                 rgb_activation: str = 'sigmoid',
                  rgb_padding: float = 0.001,
+                 disable_integration: bool = False,
                  append_identity: bool = True,
                  mlp_net_depth: int = 8,
-                 mlp_net_width: int = 512,
-                 mlp_net_depth_condition: int = 3,
+                 mlp_net_width: int = 256,
+                 mlp_net_depth_condition: int = 1,
                  mlp_net_width_condition: int = 128,
                  mlp_skip_index: int = 4,
                  mlp_num_rgb_channels: int = 3,
-                 deg_exposure: int = 4,
-                 appearance_dim: int = 32,
-                 appearance_count: int = 0):
+                 mlp_num_density_channels: int = 1,
+                 mlp_net_activation: str = 'relu',
+                 deg_exposure: int = 0,
+                 appearance_dim: int = 0,
+                 appearance_count: int = 0,
+                 visib:Optional[torch.nn.Module]=None, *kwargs):
         super(MipNerf, self).__init__()
-        # Standard deviation of noise added to raw density.
-        self.density_noise = density_noise
-        # The shift added to raw densities pre-activation.
-        self.density_bias = density_bias
-        mlp_xyz_dim = max_deg_point * 3 * 2
+        self.num_levels = num_levels  # The number of sampling levels.
+        self.num_samples = num_samples  # The number of samples per level.
+        self.disparity = disparity  # If True, sample linearly in disparity, not in depth.
+        self.ray_shape = ray_shape  # The shape of cast rays ('cone' or 'cylinder').
+        self.disable_integration = disable_integration  # If True, use PE instead of IPE.
+        self.min_deg_point = min_deg_point  # Min degree of positional encoding for 3D points.
+        self.max_deg_point = max_deg_point  # Max degree of positional encoding for 3D points.
+        self.use_viewdirs = use_viewdirs  # If True, use view directions as a condition.
+        self.deg_view = deg_view  # Degree of positional encoding for viewdirs.
+        self.density_noise = density_noise  # Standard deviation of noise added to raw density.
+        self.density_bias = density_bias  # The shift added to raw densities pre-activation.
+        self.resample_padding = resample_padding  # Dirichlet/alpha "padding" on the histogram.
+        self.stop_resample_grad = stop_resample_grad  # If True, don't backprop across levels')
+        mlp_xyz_dim = (max_deg_point - min_deg_point) * 3 * 2
         mlp_view_dim = deg_view * 3 * 2
         mlp_view_dim = mlp_view_dim + 3 if append_identity else mlp_view_dim
 
-        self.use_exposure = deg_exposure > 0
-        self.use_appearance = appearance_dim > 0
         self.deg_exposure = deg_exposure
+        assert appearance_dim > 0 and appearance_count > 0, 'appearance_dim and appearance_count must large 0 all'
         mlp_view_dim = mlp_view_dim + 2*deg_exposure if deg_exposure > 0 else mlp_view_dim
+        mlp_view_dim = mlp_view_dim + 1 if append_identity else mlp_view_dim
+
         mlp_view_dim = mlp_view_dim + appearance_dim if appearance_dim > 0 else mlp_view_dim
-        assert (appearance_count > 0 and appearance_dim > 0) or (appearance_count == 0 and appearance_dim == 0),\
-            "please set correct appearance_count and dim"
+        self.expo_appe = (appearance_dim > 0 and appearance_count > 0 and deg_exposure)
 
         self.mlp = MLP(mlp_net_depth, mlp_net_width, mlp_net_depth_condition, mlp_net_width_condition,
-                       mlp_skip_index, mlp_num_rgb_channels, mlp_xyz_dim, mlp_view_dim, appearance_dim, appearance_count)
-        self.rgb_activation = torch.nn.Sigmoid()
-        self.rgb_padding = rgb_padding
-        self.density_activation = torch.nn.Softplus()
+                       mlp_skip_index, mlp_num_rgb_channels, mlp_num_density_channels, mlp_net_activation,
+                       mlp_xyz_dim, mlp_view_dim, appearance_dim, appearance_count)
+        self.visib = visib
 
-    def forward(self, samples_enc: torch.tensor, viewdirs_enc: torch.tensor,
-                images_id: torch.tensor, exposure_enc: torch.tensor, 
-                randomized: bool):
+        if rgb_activation == 'sigmoid':  # The RGB activation.
+            self.rgb_activation = torch.nn.Sigmoid()
+        else:
+            raise NotImplementedError
+        self.rgb_padding = rgb_padding
+        if density_activation == 'softplus':  # Density activation.
+            self.density_activation = torch.nn.Softplus()
+        else:
+            raise NotImplementedError
+
+    def forward(self, rays: namedtuple, randomized: bool, white_bkgd: bool=False):
         """The mip-NeRF Model.
         Args:
             rays: util.Rays, a namedtuple of ray origins, directions, and viewdirs.
             randomized: bool, use randomized stratified sampling.
-            chunk_size: int, chunk size for render
+            white_bkgd: bool, if True, use white as the background (black o.w.).
         Returns:
             ret: list, [*(rgb, distance, acc)]
         """
-        raw_rgbs, raw_densitys = self.mlp(
-            samples_enc,
-            viewdirs_enc,
-            images_id if self.use_appearance else None,
-            exposure_enc if self.use_exposure else None,
-        )
 
-        # Add noise to regularize the density predictions if needed.
-        if randomized and (self.density_noise > 0):
-            raw_densitys += self.density_noise * \
-                torch.randn(raw_densitys.shape, dtype=raw_densitys.dtype)
+        ret = {}
+        t_samples, weights = None, None
+        stage = None
+        for i_level in range(self.num_levels):
+            # key, rng = random.split(rng)
+            if i_level == 0:
+                stage = 'coarse'
+                # Stratified sampling along rays
+                t_samples, means_covs = sample_along_rays(
+                    rays.origins,
+                    rays.directions,
+                    rays.radii,
+                    self.num_samples,
+                    rays.near,
+                    rays.far,
+                    randomized,
+                    self.disparity,
+                    self.ray_shape,
+                )
+            else:
+                stage='fine'
+                t_samples, means_covs = resample_along_rays(
+                    rays.origins,
+                    rays.directions,
+                    rays.radii,
+                    t_samples,
+                    weights,
+                    randomized,
+                    self.ray_shape,
+                    self.stop_resample_grad,
+                    resample_padding=self.resample_padding,
+                )
+            if self.disable_integration:
+                means_covs = (means_covs[0], torch.zeros_like(means_covs[1]))
+            samples_enc = integrated_pos_enc(
+                means_covs,
+                self.min_deg_point,
+                self.max_deg_point,
+            )  # samples_enc: [B, N, 2*3*L]  L:(max_deg_point - min_deg_point)
 
-        # Volumetric rendering.
-        rgb = self.rgb_activation(raw_rgbs)  # [B, N, 3]
-        rgb = rgb * (1 + 2 * self.rgb_padding) - self.rgb_padding
-        density = self.density_activation(
-            raw_densitys + self.density_bias)  # [B, N, 1]
-        return rgb, density
+            # Point attribute predictions
+            if self.use_viewdirs:
+                viewdirs_enc = pos_enc(
+                    rays.viewdirs,
+                    min_deg=0,
+                    max_deg=self.deg_view,
+                    append_identity=True,
+                )
+                
+                if self.expo_appe:
+                    exposures_enc = pos_enc(
+                        rays.exposures, 
+                        0, 
+                        self.deg_exposure, 
+                        True
+                    )
+                    raw_rgb, raw_density = self.mlp(samples_enc, viewdirs_enc, exposures_enc, rays.image_indices)
+                else:
+                    raw_rgb, raw_density = self.mlp(samples_enc, viewdirs_enc)
+            else:
+                raw_rgb, raw_density = self.mlp(samples_enc)
+
+            if self.visib is not None:
+                visib_trans = self.visib(samples_enc, viewdirs_enc)
+
+            # Add noise to regularize the density predictions if needed.
+            if randomized and (self.density_noise > 0):
+                raw_density += self.density_noise * torch.randn(raw_density.shape, dtype=raw_density.dtype)
+
+            # Volumetric rendering.
+            rgb = self.rgb_activation(raw_rgb)  # [B, N, 3]
+            rgb = rgb * (1 + 2 * self.rgb_padding) - self.rgb_padding
+            density = self.density_activation(raw_density + self.density_bias)  # [B, N, 1]
+            comp_rgb, distance, acc, weights, trans = volumetric_rendering(
+                rgb,
+                density,
+                t_samples,
+                rays.directions,
+                white_bkgd=white_bkgd,
+            )
+            
+            ret[f'rgb_{stage}'] = comp_rgb
+            ret[f'depth_{stage}'] = distance
+            ret[f'weights_{stage}'] = weights
+            ret[f'trans_{stage}'] = trans
+            ret[f'visib_trans_{stage}'] = visib_trans if self.visib is not None else None
+        return ret
