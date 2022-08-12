@@ -12,7 +12,7 @@ from datasets.decoder_utils import axisangle_to_R
 from utils.lr_schedule import MipLRDecay
 from torch.utils.data import DataLoader
 from utils.vis import stack_rgb, visualize_depth
-
+from typing import NamedTuple
 
 class BlockNeRFSystem(LightningModule):
     def __init__(self, hparams):
@@ -42,7 +42,7 @@ class BlockNeRFSystem(LightningModule):
                 torch.nn.Parameter(torch.zeros(N, 3, device=self.device)))        
         # self.visib = Visibility()
 
-    def forward(self, batch_rays: torch.Tensor, randomized: bool, white_bkgd: bool=False):
+    def forward(self, batch_rays: NamedTuple, randomized: bool, white_bkgd: bool=False):
         if self.hparams['optimize_ext']:
             dR = axisangle_to_R(self.dR[batch_rays.image_indices.long().squeeze(-1)])
             dt = self.dT[batch_rays.image_indices.long().squeeze(-1)]

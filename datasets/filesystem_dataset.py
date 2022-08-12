@@ -34,23 +34,23 @@ class FilesystemDataset(Dataset):
         self.prefix = 'waymo_block_nerf_mission_bay_'
         self.chosen_index = None
         self.resume_from_ckpt = False
-        self._chunk_load_executor = ThreadPoolExecutor(max_workers=1)
-        self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
+        # self._chunk_load_executor = ThreadPoolExecutor(max_workers=1)
+        # self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
         self.near = near
         self.far = far
 
 
     def load_chunk(self) -> None:
-        # self._loaded_rays, self._loaded_rgbs, self.chosen_index = self._load_chunk_inner()
-        self._loaded_rays, self._loaded_rgbs, self.chosen_index = self._chunk_future.result()
-        self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
-    
+        self._loaded_rays, self._loaded_rgbs, self.chosen_index = self._load_chunk_inner()
+        # self._loaded_rays, self._loaded_rgbs, self.chosen_index = self._chunk_future.result()
+        # self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
+
 
     def set_state(self, chosen_index:int, image_hash:List) -> None:
         self.image_hash = image_hash
         self.resume_from_ckpt = True
         self.chosen_index = chosen_index
-        self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
+    #     self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
         self.load_chunk()
 
     def _get_radii(self, w, h, focal):
@@ -63,7 +63,7 @@ class FilesystemDataset(Dataset):
         dx = np.concatenate([dx, dx[-2:-1, :]], 0)
         radii = dx[..., None] * 2 / np.sqrt(12)
         return radii
-    
+
     def _flatten(self, x):
         # Always flatten out the height x width dimensions
         x = [y.reshape([-1, y.shape[-1]]) for y in x]
@@ -106,8 +106,8 @@ class FilesystemDataset(Dataset):
             # )
             # dataset_map = dataset.map(_parse_fn)
             dataset_map = TFRecordDataset(tfrecord_path, index_path=None, compression_type="gzip", transform=_decoder)
-            
-            
+
+
             for batch in dataset_map:
                 img_sh = str(int(batch['image_hash']))
                 if img_sh in value:
@@ -125,7 +125,7 @@ class FilesystemDataset(Dataset):
                         direction = direction[:, width//2:]
                         batch['mask'] = batch['mask'][:, width//2:]
                     images.append(batch["image"].astype(np.float32) / 255)
-                    ray_origins.append(batch['ray_origins'])
+                    ray_origins.append(batch['ray_origins']*100)
                     radiis.append(radii)
                     directions.append(direction)
                     image_indices.append(np.ones_like(batch['ray_origins'][...,0:1])*it['index'])
@@ -137,7 +137,7 @@ class FilesystemDataset(Dataset):
                     else:
                         masks.append(np.ones_like(batch['ray_origins'][...,0:1]))
 
-        
+
         rays = Rays(
             origins=ray_origins,
             directions=directions,
@@ -162,7 +162,7 @@ class FilesystemDataset(Dataset):
         rays = Rays(*[getattr(self._loaded_rays, key)[index] for key in Rays_keys])
         return rays, self._loaded_rgbs[index]
 
-   
+
 
 if __name__ == '__main__':
     import time
@@ -195,7 +195,7 @@ if __name__ == '__main__':
             val_hashs_dict[val] = {
                 'tfrecord': key,
                 'type': 'validation',
-                'index': index,                   
+                'index': index,
             }
             index+=1
 

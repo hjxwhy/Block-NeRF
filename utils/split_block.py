@@ -138,8 +138,6 @@ def split_dataset(output_path, radius=2, overlap=0.5, prefix=None):
 
 def get_centroids(positions, radius=2):
     print(radius)
-    indices = np.argsort(positions[:, 0:1], axis=0)
-    positions = positions[indices, :][:, 0, :]
     centroids = []
     positions_copy = np.copy(positions) 
 

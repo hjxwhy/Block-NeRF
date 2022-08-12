@@ -51,7 +51,7 @@ def main(hparams):
         max_steps=hparams['optimizer.max_steps'],
         max_epochs=-1,
         callbacks=callbacks,
-        val_check_interval=hparams['val.check_interval'],
+        # val_check_interval=hparams['val.check_interval'],
         logger=logger,
         enable_model_summary=False,
         accelerator='auto',
