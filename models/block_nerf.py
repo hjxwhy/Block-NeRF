@@ -41,6 +41,7 @@ class BlockNeRFSystem(LightningModule):
             self.register_parameter('dT',
                 torch.nn.Parameter(torch.zeros(N, 3, device=self.device)))        
         # self.visib = Visibility()
+        self._setup()
 
     def forward(self, batch_rays: NamedTuple, randomized: bool, white_bkgd: bool=False):
         if self.hparams['optimize_ext']:
@@ -53,7 +54,7 @@ class BlockNeRFSystem(LightningModule):
         res = self.mip_nerf(batch_rays, randomized, white_bkgd)  # num_layers result
         return res
 
-    def setup(self, stage):
+    def _setup(self):
         dataset = FilesystemDataset
         self.train_dataset = dataset(self.image_hashs_dict, self.hparams['data_path'], self.hparams['img_nums'],\
                                      near=self.hparams['near'], far=self.hparams['far'])

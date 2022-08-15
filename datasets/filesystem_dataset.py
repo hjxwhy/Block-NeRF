@@ -125,7 +125,7 @@ class FilesystemDataset(Dataset):
                         direction = direction[:, width//2:]
                         batch['mask'] = batch['mask'][:, width//2:]
                     images.append(batch["image"].astype(np.float32) / 255)
-                    ray_origins.append(batch['ray_origins']*100)
+                    ray_origins.append(batch['ray_origins'])
                     radiis.append(radii)
                     directions.append(direction)
                     image_indices.append(np.ones_like(batch['ray_origins'][...,0:1])*it['index'])
