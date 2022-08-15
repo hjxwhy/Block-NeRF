@@ -5,7 +5,7 @@ block_id: 0
 exp_name: 'waymo'
 near: 0.1
 far: 10.
-optimize_ext: True
+optimize_ext: False
 train:
   batch_size: 1024
   batch_type: 'all_images'  # single_image: inputs a full image; all_images: inputs batch_size rays sampled from different image
@@ -27,7 +27,7 @@ nerf:
   resample_padding: 0.01  # Dirichlet/alpha "padding" on the histogram.
   stop_resample_grad: True  # If True, don't backprop across levels')
   use_viewdirs: True  # If True, use view directions as a condition.
-  disparity: False  # If True, sample linearly in disparity, not in depth.
+  disparity: True  # If True, sample linearly in disparity, not in depth.
   ray_shape: 'cone'  # The shape of cast rays ('cone' or 'cylinder').
   min_deg_point: 0  # Min degree of positional encoding for 3D points.
   max_deg_point: 16  # Max degree of positional encoding for 3D points.
@@ -41,7 +41,7 @@ nerf:
   append_identity: Ture  # If True, append original view direction features
   mlp:
     net_depth: 8  # The depth of the first part of MLP.
-    net_width: 516  # The width of the first part of MLP.
+    net_width: 512  # The width of the first part of MLP.
     net_depth_condition: 1  # The depth of the second part of MLP.
     net_width_condition: 128  # The width of the second part of MLP.
     net_activation: 'relu'  # The activation function.

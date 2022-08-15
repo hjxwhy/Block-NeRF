@@ -8,6 +8,7 @@ from models.mip import rearrange_render_image
 from utils.metrics import calc_psnr
 # from datasets import dataset_dict
 from datasets.filesystem_dataset import FilesystemDataset, Rays
+from datasets.memory_dataset import WaymoDataset, Rays
 from datasets.decoder_utils import axisangle_to_R
 from utils.lr_schedule import MipLRDecay
 from torch.utils.data import DataLoader
@@ -29,6 +30,7 @@ class BlockNeRFSystem(LightningModule):
             'mlp_net_width':hparams['nerf.mlp.net_width'],
             'deg_exposure': hparams['nerf.mlp.deg_exposure'],
             'appearance_dim': hparams['nerf.mlp.appearance_dim'],
+            'disparity':hparams['nerf.disparity'],
             'appearance_count':len(self.image_hashs_dict),
             'visib':Visibility()
         }
@@ -55,13 +57,14 @@ class BlockNeRFSystem(LightningModule):
         return res
 
     def _setup(self):
-        dataset = FilesystemDataset
+        # dataset = FilesystemDataset
+        dataset = WaymoDataset
         self.train_dataset = dataset(self.image_hashs_dict, self.hparams['data_path'], self.hparams['img_nums'],\
                                      near=self.hparams['near'], far=self.hparams['far'])
         self.val_dataset = dataset(self.val_hashs_dict, self.hparams['data_path'], self.hparams['img_nums'], \
-                                     near=self.hparams['near'], far=self.hparams['far'], split='val')
+                                     near=self.hparams['near'], far=self.hparams['far'], split='validation')
         
-        self.refresh_datasets()
+        # self.refresh_datasets()
 
 
     def _get_image_metadata(self):
@@ -113,7 +116,7 @@ class BlockNeRFSystem(LightningModule):
 
     def train_dataloader(self):
         # self.train_dataset.load_chunk()
-        print('choose train index chosen_index-> {}'.format(self.train_dataset.chosen_index))
+        # print('choose train index chosen_index-> {}'.format(self.train_dataset.chosen_index))
         return DataLoader(self.train_dataset,
                           shuffle=True,
                           num_workers=self.hparams['train.num_work'],
@@ -123,7 +126,7 @@ class BlockNeRFSystem(LightningModule):
     def val_dataloader(self):
         # must give 1 worker
         # self.val_dataset.load_chunk()
-        print('choose val index chosen_index-> {}'.format(self.val_dataset.chosen_index))
+        # print('choose val index chosen_index-> {}'.format(self.val_dataset.chosen_index))
         return DataLoader(self.val_dataset,
                           shuffle=False,
                           num_workers=1,

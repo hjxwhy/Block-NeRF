@@ -148,7 +148,7 @@ def sample_along_rays(origins, directions, radii, num_samples, near, far, random
     t_samples = torch.linspace(0., 1., num_samples + 1, device=origins.device)
 
     if disparity:
-        t_samples = 1. / (1. / near * (1. - t_samples) + 1. / far * t_samples)
+        t_samples = 1. / ((1. / near) * (1. - t_samples) + (1. / far) * t_samples)
     else:
         # t_samples = near * (1. - t_samples) + far * t_samples
         t_samples = near + (far - near) * t_samples
