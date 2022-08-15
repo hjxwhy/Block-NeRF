@@ -3,7 +3,7 @@ from einops import rearrange
 import numpy as np
 # from datasets.datasets import Rays_keys, Rays
 from datasets.filesystem_dataset import Rays_keys, Rays
-from functorch import jacrev, vmap
+#from functorch import jacrev, vmap
 
 
 def distloss(weight, samples):

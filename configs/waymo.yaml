@@ -3,7 +3,7 @@ num_gpus: 1
 img_nums: 1
 block_id: 0
 exp_name: 'waymo'
-near: 0.1.
+near: 0.1
 far: 10.
 optimize_ext: True
 train:
