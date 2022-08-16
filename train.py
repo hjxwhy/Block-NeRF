@@ -54,14 +54,14 @@ def main(hparams):
         # val_check_interval=hparams['val.check_interval'],
         logger=logger,
         enable_model_summary=False,
-        accelerator='auto',
+        accelerator='ddp',
         devices=hparams['num_gpus'],
         num_sanity_val_steps=0,
         benchmark=True,
         profiler="simple" if hparams['num_gpus'] == 1 else None,
         strategy=DDPPlugin(find_unused_parameters=False) if hparams['num_gpus'] > 1 else None,
         limit_val_batches=hparams['val.sample_num'], 
-        reload_dataloaders_every_n_epochs=1
+        # reload_dataloaders_every_n_epochs=1
     )
 
     trainer.fit(system, ckpt_path=hparams['checkpoint.resume_path'])

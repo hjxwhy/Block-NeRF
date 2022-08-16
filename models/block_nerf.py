@@ -191,7 +191,7 @@ class BlockNeRFSystem(LightningModule):
 
         self.log('val/loss', mean_loss)
         self.log('val/psnr', mean_psnr, prog_bar=True)
-        self.refresh_datasets()
+        # self.refresh_datasets()
 
     def render_image(self, batch):
         rays, rgbs = batch
