@@ -1,9 +1,11 @@
 near: 1
 far: 1000
-num_samples: 56
+num_samples: 256
 max_deg_point: 16
 deg_view: 4
 deg_exposure: 4
-batch_size: 10
-img_nums: 5
+batch_size: 1024
+img_nums: 10
+val_interval: 10000
+dataset_type: 'memory'
 # ckpt_path: /home/hjx/Block-NeRF/block_test/0/models/10.pt

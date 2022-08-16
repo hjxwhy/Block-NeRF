@@ -69,8 +69,9 @@ def render_rays(nerf: nn.Module,
             )  # samples_enc: [B, N, 2*3*L]  L:(max_deg_point - min_deg_point)
 
             # Point attribute predictions
+            view_dirs = rays[:, 3:6] / torch.norm(rays[:, 3:6], dim=-1, keepdim=True)
             viewdirs_enc = pos_enc(
-                rays[:, 3:6],
+                view_dirs,
                 min_deg=0,
                 max_deg=hparams.deg_view,
                 append_identity=True,

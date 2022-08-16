@@ -1,7 +1,7 @@
 import torch
 from einops import rearrange
 import numpy as np
-from functorch import jacrev, vmap
+# from functorch import jacrev, vmap
 
 def distloss(weight, samples):
     '''

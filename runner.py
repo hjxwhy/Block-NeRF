@@ -162,22 +162,30 @@ class Runner:
 
             dataset = FilesystemDataset(
                 self.train_items, self.hparams.dataset_path, self.hparams.img_nums)
-            
+
             self.val_dataset = FilesystemDataset(
                 self.val_items, self.hparams.dataset_path, 1, split='val')
+        elif self.hparams.dataset_type == 'memory':
+            from datasets.memory_dataset import WaymoDataset
+            if 'RANK' in os.environ and (not self.is_local_master):
+                dist.barrier()  # 设置栅栏，等待主线程数据加载完毕
+            dataset = WaymoDataset(self.train_items, self.hparams.dataset_path)
 
-            if self.hparams.ckpt_path is not None and self.hparams.resume_ckpt_state:
-                dataset.set_state(checkpoint['chosen_index'], checkpoint['image_hash'])
+            self.val_dataset = WaymoDataset(
+                self.val_items, self.hparams.dataset_path, 1, split='val')
 
-            if 'RANK' in os.environ and self.is_local_master:
-                dist.barrier()  # 让主线程也来栅栏这里，所有线程在一起走
+        if self.hparams.ckpt_path is not None and self.hparams.resume_ckpt_state:
+            dataset.set_state(checkpoint['chosen_index'], checkpoint['image_hash'])
 
-        if self.is_master:
-            pbar = tqdm(total=self.hparams.train_iterations)
-            pbar.update(train_iterations)
-        else:
-            pbar = None
+        if 'RANK' in os.environ and self.is_local_master:
+            dist.barrier()  # 让主线程也来栅栏这里，所有线程在一起走
 
+        # if self.is_master:
+        #     pbar = tqdm(total=self.hparams.train_iterations)
+        #     pbar.update(train_iterations)
+        # else:
+        #     pbar = None
+        pbar = None
         while train_iterations < self.hparams.train_iterations:
             # If discard_index >= 0, we already set to the right chunk through set_state
             if self.hparams.dataset_type == 'filesystem' and discard_index == -1:
@@ -188,12 +196,16 @@ class Runner:
                 sampler = DistributedSampler(
                     dataset, world_size, int(os.environ['RANK']))
                 assert self.hparams.batch_size % world_size == 0
-                data_loader = DataLoader(dataset, batch_size=self.hparams.batch_size // world_size, sampler=sampler,
+                data_loader = DataLoader(dataset, batch_size=self.hparams.batch_size, sampler=sampler,
                                          num_workers=6, pin_memory=True)
             else:
                 data_loader = DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=True, num_workers=6,
                                          pin_memory=True)
 
+            if self.is_master:
+                pbar = tqdm(total=len(data_loader))
+            else:
+                pbar = None
             for dataset_index, item in enumerate(data_loader):
                 if dataset_index <= discard_index:
                     continue
@@ -217,7 +229,8 @@ class Runner:
                                 raise Exception(
                                     'Train metrics not finite: {}'.format(metrics))
                             if key == 'psnr':
-                                pbar.set_postfix(psnr=val)
+                                if self.is_master:
+                                    pbar.set_postfix(psnr=val)
 
                 for optimizer in optimizers.values():
                     optimizer.zero_grad(set_to_none=True)
@@ -240,7 +253,9 @@ class Runner:
                             'train/{}'.format(key), value, train_iterations)
 
                     if train_iterations > 0 and train_iterations % self.hparams.ckpt_interval == 0:
-                        self._save_checkpoint(optimizers, scaler, train_iterations, dataset_index, dataset.chosen_index, dataset.image_hash)
+                        self._save_checkpoint(optimizers, scaler, train_iterations, dataset_index,
+                                              dataset.chosen_index if self.hparams.dataset_type == 'filesystem' else None,
+                                              dataset.image_hash if self.hparams.dataset_type == 'filesystem' else None)
 
                 if train_iterations > 0 and train_iterations % self.hparams.val_interval == 0:
                     self._run_validation(train_iterations)
@@ -253,8 +268,9 @@ class Runner:
 
         if self.is_master:
             pbar.close()
-            self._save_checkpoint(optimizers, scaler, train_iterations, dataset_index, dataset.chosen_index, dataset.image_hash)
-
+            self._save_checkpoint(optimizers, scaler, train_iterations, dataset_index,
+                                  dataset.chosen_index if self.hparams.dataset_type == 'filesystem' else None,
+                                  dataset.image_hash if self.hparams.dataset_type == 'filesystem' else None)
 
     # def eval(self):
     #     self._setup_experiment_dir()
@@ -295,8 +311,7 @@ class Runner:
         if 'RANK' in os.environ:
             dist.barrier()
 
-    def _training_step(self, rgbs: torch.Tensor, rays: torch.Tensor) \
-            -> Tuple[Dict[str, Union[torch.Tensor, float]], bool]:
+    def _training_step(self, rgbs: torch.Tensor, rays: torch.Tensor):
         results = render_rays(nerf=self.nerf,
                               visibility=self.visibility,
                               rays=rays,
@@ -333,7 +348,8 @@ class Runner:
         return metrics
 
     def _run_validation(self, train_index: int) -> Dict[str, float]:
-        self.val_dataset.load_chunk()
+        if self.hparams.dataset_type == 'filesystem':
+            self.val_dataset.load_chunk()
 
         if 'RANK' in os.environ:
             world_size = int(os.environ['WORLD_SIZE'])
@@ -341,7 +357,7 @@ class Runner:
                 self.val_dataset, world_size, int(os.environ['RANK']))
             assert self.hparams.batch_size % world_size == 0
             data_loader = DataLoader(self.val_dataset, batch_size=1, sampler=sampler,
-                                     num_workers=6, pin_memory=True)
+                                     num_workers=6, pin_memory=True, shuffle=True)
         else:
             data_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=True, num_workers=6,
                                      pin_memory=True)
@@ -366,9 +382,12 @@ class Runner:
                         base_tmp_path.mkdir()
                         metric_path.mkdir()
                         image_path.mkdir()
+                        trans_path.mkdir()
                     dist.barrier()
 
                 for i, batch in main_tqdm(enumerate(data_loader)):
+                    if i == 5:
+                        break
 
                     viz_rgbs = batch['rgbs'][0]
                     results = self.render_image(batch)
@@ -378,7 +397,8 @@ class Runner:
                     eval_rgbs = viz_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
                     eval_result_rgbs = viz_result_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
                     mask = (batch['rays'][-1][:, :, viz_rgbs.shape[1] // 2:] > 0)
-                    val_psnr = psnr(eval_result_rgbs.view(-1, 3)[mask.flatten(), :], eval_rgbs.view(-1, 3)[mask.flatten(), :])
+                    val_psnr = psnr(eval_result_rgbs.view(-1, 3)[mask.flatten(), :],
+                                    eval_rgbs.view(-1, 3)[mask.flatten(), :])
 
                     metric_key = 'val/psnr/{}'.format(i)
                     if self.writer is None:
@@ -387,10 +407,10 @@ class Runner:
 
                     val_metrics['val/psnr'] += val_psnr
 
-                    val_ssim = ssim(eval_result_rgbs.view(*eval_rgbs.shape)*mask.float(), eval_rgbs*mask.float(), 1)
+                    val_ssim = ssim(eval_result_rgbs.view(*eval_rgbs.shape) * mask.float(), eval_rgbs * mask.float(), 1)
 
                     metric_key = 'val/ssim/{}'.format(i)
-                    if self.writer is  None:
+                    if self.writer is None:
                         torch.save({'value': val_ssim, 'metric_key': metric_key, 'agg_key': 'val/ssim'},
                                    metric_path / 'ssim-{}.pt'.format(i))
 
@@ -408,7 +428,7 @@ class Runner:
                             'val/{}'.format(i), T.ToTensor()(img), train_index)
                     else:
                         img.save(str(image_path / '{}.jpg'.format(i)))
-                    
+
                     if f'visibility_trans_{typ}' in results:
                         vi_trans = results[f'visibility_trans_{typ}']
                         vi_trans = vi_trans.squeeze(-1).sum(-1).float()
@@ -421,7 +441,6 @@ class Runner:
                                 'vis_trans/{}'.format(i), T.ToTensor()(vi_trans_vis), train_index)
                         else:
                             vi_trans_vis.save(str(trans_path / '{}.jpg'.format(i)))
-
 
                     del results
 
@@ -438,7 +457,7 @@ class Runner:
                             img = Image.open(str(image_file))
                             self.writer.add_image(
                                 'val/{}'.format(image_file.stem), T.ToTensor()(img), train_index)
-                        
+
                         for image_file in trans_path.iterdir():
                             img = Image.open(str(image_file))
                             self.writer.add_image(
@@ -449,7 +468,7 @@ class Runner:
                             self.writer.add_scalar('{}/avg'.format(key), avg_val, 0)
 
                     dist.barrier()
-                
+
                 else:
                     for key in val_metrics:
                         avg_val = val_metrics[key] / len(self.val_dataset)
@@ -463,7 +482,8 @@ class Runner:
 
             return val_metrics
 
-    def _save_checkpoint(self, optimizers: Dict[str, any], scaler: GradScaler, train_index: int, dataset_index: int, chosen_index: int, image_hash: List) -> None:
+    def _save_checkpoint(self, optimizers: Dict[str, any], scaler: GradScaler, train_index: int, dataset_index: int,
+                         chosen_index: int, image_hash: List) -> None:
         dict = {
             'model_state_dict': self.nerf.state_dict(),
             'scaler': scaler.state_dict(),
@@ -482,7 +502,7 @@ class Runner:
 
         torch.save(dict, self.model_path / '{}.pt'.format(train_index))
 
-    def render_image(self, batch) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    def render_image(self, batch):
         flatten_items = torch.hstack(
             [item.reshape([-1, item.shape[-1]]) for item in batch['rays']])
 
@@ -534,7 +554,7 @@ class Runner:
         ma = torch.quantile(to_use, 0.95)
 
         scalar_tensor = (scalar_tensor - mi) / \
-            max(ma - mi, 1e-8)  # normalize to 0~1
+                        max(ma - mi, 1e-8)  # normalize to 0~1
         scalar_tensor = scalar_tensor.clamp_(0, 1)
 
         scalar_tensor = ((1 - scalar_tensor) *
@@ -543,10 +563,10 @@ class Runner:
 
     def _get_image_metadata(self):
         dataset_path = Path(self.hparams.dataset_path)
-        with open(dataset_path/'blocks_meta_train.json', 'r') as f:
+        with open(dataset_path / 'blocks_meta_train.json', 'r') as f:
             block_train = json.load(f)
             block_train = block_train[str(self.hparams.block_id)]
-        with open(dataset_path/'blocks_meta_validation.json', 'r') as f:
+        with open(dataset_path / 'blocks_meta_validation.json', 'r') as f:
             block_val = json.load(f)
             block_val = block_val[str(self.hparams.block_id)]
         index = 0

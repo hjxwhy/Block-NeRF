@@ -3,7 +3,7 @@ import configargparse
 
 def get_opts_base():
     parser = configargparse.ArgParser(config_file_parser_class=configargparse.YAMLConfigFileParser)
-    parser.add_argument('--config_file', default='/home/hjx/Block-NeRF/configs/lego.yaml', is_config_file=True)
+    parser.add_argument('--config_file', default='/home/hjx/code/Block-NeRF/configs/lego.yaml', is_config_file=True)
     parser.add_argument('--block_id', type=int, default=3)
     parser.add_argument('--num_samples', type=int)
     parser.add_argument('--max_deg_point', type=int)
@@ -80,7 +80,7 @@ def get_opts_base():
 
     parser.add_argument('--batch_size', type=int, default=1024, help='batch size')
     parser.add_argument('--img_nums', type=int, default=5)
-    parser.add_argument('--image_pixel_batch_size', type=int, default= 8*1024,
+    parser.add_argument('--image_pixel_batch_size', type=int, default=4*1024,
                         help='number of pixels to evaluate per split when rendering validation images')
     parser.add_argument('--model_chunk_size', type=int, default=32 * 1024,
                         help='chunk size to split the input to avoid OOM')
@@ -101,8 +101,8 @@ def get_opts_base():
                         help='use spherical foreground bounds instead of ellipse')
 
     parser.add_argument('--train_iterations', type=int, default=500000, help='training iterations')
-    parser.add_argument('--val_interval', type=int, default=5, help='validation interval')
-    parser.add_argument('--ckpt_interval', type=int, default=10, help='checkpoint interval')
+    parser.add_argument('--val_interval', type=int, default=10000, help='validation interval')
+    parser.add_argument('--ckpt_interval', type=int, default=10000, help='checkpoint interval')
 
     parser.add_argument('--no_resume_ckpt_state', dest='resume_ckpt_state', default=True, action='store_false')
 

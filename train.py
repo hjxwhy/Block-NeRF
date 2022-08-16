@@ -15,8 +15,8 @@ from runner import Runner
 def _get_train_opts() -> Namespace:
     parser = get_opts_base()
 
-    parser.add_argument('--exp_name', type=str, default='block_test', help='experiment name')
-    parser.add_argument('--dataset_path', type=str,default='/home/hjx/Documents/nerf/block_nerf')
+    parser.add_argument('--exp_name', type=str, default='/home/hjx/Videos/block_exp/block_test', help='experiment name')
+    parser.add_argument('--dataset_path', type=str,default='/media/hjx/DataDisk/waymo')
 
     return parser.parse_args()
 
