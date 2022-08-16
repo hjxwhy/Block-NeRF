@@ -54,7 +54,7 @@ def main(hparams):
         # val_check_interval=hparams['val.check_interval'],
         logger=logger,
         enable_model_summary=False,
-        accelerator='ddp',
+        accelerator='auto',
         devices=hparams['num_gpus'],
         num_sanity_val_steps=0,
         benchmark=True,

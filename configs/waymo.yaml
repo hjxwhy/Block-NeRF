@@ -3,8 +3,8 @@ num_gpus: 1
 img_nums: 1
 block_id: 0
 exp_name: 'waymo'
-near: 0.1
-far: 10.
+near: 1
+far: 1000.
 optimize_ext: False
 train:
   batch_size: 1024

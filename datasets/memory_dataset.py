@@ -31,7 +31,7 @@ def get_ray_directions(H, W, K):
         torch.stack([(i - cx) / fx, -(j - cy) / fy, -
         torch.ones_like(i)], -1)  # (H, W, 3)
     # 相机归一化平面与像素坐标系之间的转换
-    directions = directions / torch.norm(directions, dim=-1, keepdim=True)
+    # directions = directions / torch.norm(directions, dim=-1, keepdim=True)
     return directions
 
 
@@ -91,6 +91,7 @@ class WaymoDataset(Dataset):
         ray_origins = []
         radiis = []
         directions = []
+        view_dirs = []
         image_indices = []
         exposures = []
         masks = []
@@ -125,6 +126,8 @@ class WaymoDataset(Dataset):
 
             direction = get_ray_directions(height, width, K)
             rays_o, rays_d = get_rays(direction, c2w)
+            view_dir = rays_d / torch.norm(rays_d, dim=-1, keepdim=True)
+            rays_o *= 100
 
             # 求半径
             dx_1 = torch.sqrt(
@@ -136,6 +139,7 @@ class WaymoDataset(Dataset):
                 ray_origins.append(rays_o[:, width // 2:, :])
                 radiis.append(radii[:, width // 2:, :])
                 directions.append(direction[:, width // 2:, :])
+                view_dirs.append(view_dir[:, width//2:, :])
                 image_indices.append(values['index'] * torch.ones_like(direction[:, width // 2:, :1]))
                 exposures.append(exposure * torch.ones_like(direction[:, width // 2:, :1]))
                 masks.append(torch.ones_like(direction[:, width // 2:, :1]))
@@ -146,6 +150,7 @@ class WaymoDataset(Dataset):
                 ray_origins.append(rays_o)
                 radiis.append(radii)
                 directions.append(direction)
+                view_dirs.append(view_dir)
                 image_indices.append(values['index'] * torch.ones_like(direction[..., :1]))
                 exposures.append(exposure * torch.ones_like(direction[..., :1]))
                 masks.append(torch.ones_like(direction[..., :1]))
@@ -155,7 +160,7 @@ class WaymoDataset(Dataset):
         rays = Rays(
             origins=ray_origins,
             directions=directions,
-            viewdirs=directions,
+            viewdirs=view_dirs,
             radii=radiis,
             lossmult=masks,
             near=nears,
